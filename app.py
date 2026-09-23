@@ -9,11 +9,13 @@ import secrets
 import hashlib
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlparse
 
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
 ARCHIVE_ROOT = Path(os.environ.get("MCONTROLLER_ARCHIVE_ROOT", "archives")).resolve()
 app = Flask(__name__)
 app.secret_key = os.environ.get("MCONTROLLER_SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 ROLES = ("admin", "operator", "viewer")
 ROLE_PERMISSIONS = {
@@ -74,6 +76,13 @@ def hash_password(password):
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310000)
     return "pbkdf2_sha256$310000$%s$%s" % (salt.hex(), digest.hex())
+
+def safe_next_url(value):
+    if not value: return url_for("index")
+    parsed=urlparse(value)
+    if parsed.scheme or parsed.netloc or not value.startswith("/"):
+        return url_for("index")
+    return value
 
 def verify_password(password, encoded):
     try:
@@ -185,7 +194,7 @@ def login():
         c=db(); row=c.execute("SELECT * FROM accounts WHERE username=? AND active=1",(username,)).fetchone(); c.close()
         if row and verify_password(password,row["password_hash"]):
             session.clear(); session["account_id"]=row["id"]
-            return redirect(request.form.get("next") or request.args.get("next") or url_for("index"))
+            return redirect(safe_next_url(request.form.get("next") or request.args.get("next")))
         error="Invalid username or password."
     return render_template("login.html",error=error,next=request.args.get("next",""))
 
@@ -291,7 +300,7 @@ def scan():
         target=request.form.get("target","").strip()
         try:
             net=ipaddress.ip_network(target,strict=False)
-            if net.version!=4 or net.prefixlen<16:
+            if net.version!=4 or net.prefixlen<16 or not net.is_private:
                 raise ValueError("Use an IPv4 private subnet from /16 to /32.")
             ports=[]
             for raw in request.form.get("ports","22,3389,5900").split(","):
