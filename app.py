@@ -168,7 +168,7 @@ def auth_context():
 
 @app.before_request
 def enforce_auth():
-    public = {"login", "setup", "static"}
+    public = {"login", "setup", "healthz", "static"}
     if request.endpoint in public or request.path.startswith("/static/"):
         return
     if account_count()==0:
