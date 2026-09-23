@@ -249,7 +249,7 @@ def mappings():
         return redirect(url_for("mappings"))
     computers=c.execute("SELECT * FROM computers ORDER BY name").fetchall()
     users=c.execute("SELECT * FROM users ORDER BY username").fetchall()
-    rows=c.execute("SELECT m.id,c.name,c.address,c.protocol,c.os,u.username FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id ORDER BY c.name,u.username").fetchall()
+    rows=c.execute("SELECT m.id,m.computer_id,m.user_id,c.name,c.address,c.protocol,c.os,u.username FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id ORDER BY c.name,u.username").fetchall()
     c.close()
     return render_template("mappings.html",computers=computers,users=users,rows=rows)
 
