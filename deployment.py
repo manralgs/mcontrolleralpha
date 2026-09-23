@@ -5,6 +5,8 @@ import socket
 import subprocess
 import shlex
 import shutil
+import hashlib
+import secrets
 from datetime import datetime
 from functools import wraps
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort
@@ -120,25 +122,63 @@ def _deploy_ssh(update, target, username):
         raise RuntimeError("Software release has no package URL.")
     if not update["install_command"]:
         raise RuntimeError("Software release has no install command.")
+
+    package_url = update["package_url"].strip()
+    parsed = urlparse(package_url)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise RuntimeError("Deployment package URL must use HTTPS.")
+    filename = os.path.basename(parsed.path) or "package"
+    if filename in {".", ".."} or "/" in filename or "\\" in filename:
+        raise RuntimeError("Invalid deployment package filename.")
+
     key = _ssh_identity()
-    package_url = update["package_url"]
-    remote_dir = "/tmp/mcontroller-deploy"
-    package = remote_dir + "/" + os.path.basename(urlparse(package_url).path or "package")
-    prep = (
-        "set -eu; mkdir -p " + shlex.quote(remote_dir) +
-        "; curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 " +
-        shlex.quote(package_url) + " -o " + shlex.quote(package)
-    )
-    result = _ssh_command(target["address"], target["port"], username, prep, key, timeout=120)
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "Remote package download failed").strip()[-2000:])
-    install = "set -eu; " + update["install_command"]
-    install = install.replace("{package}", shlex.quote(package))
-    install_result = _ssh_command(target["address"], target["port"], username, install, key, timeout=600)
-    _ssh_command(target["address"], target["port"], username, "rm -f " + shlex.quote(package), key, timeout=30)
-    if install_result.returncode != 0:
-        raise RuntimeError((install_result.stderr or install_result.stdout or "Remote installation failed").strip()[-2000:])
-    return (install_result.stdout or "Deployment completed.").strip()[-2000:]
+    token = secrets.token_hex(12)
+    remote_dir = f"/tmp/mcontroller-deploy-{token}"
+    package = remote_dir + "/" + filename
+    expected_sha256 = ""
+    try:
+        expected_sha256 = str(update["sha256"] or "").strip().lower() if "sha256" in update.keys() else ""
+    except (KeyError, TypeError):
+        expected_sha256 = ""
+    if expected_sha256 and (len(expected_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in expected_sha256)):
+        raise RuntimeError("Software release SHA-256 must be a 64-character hexadecimal value.")
+
+    def remote(command, timeout):
+        return _ssh_command(target["address"], target["port"], username, command, key, timeout=timeout)
+
+    try:
+        prep = (
+            "set -eu; umask 077; mkdir -p " + shlex.quote(remote_dir) +
+            "; curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 " +
+            shlex.quote(package_url) + " -o " + shlex.quote(package)
+        )
+        result = remote(prep, 120)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "Remote package download failed").strip()[-2000:])
+
+        if expected_sha256:
+            verify = remote(
+                "set -eu; actual=$(sha256sum " + shlex.quote(package) +
+                " | awk '{print $1}'); test \"$actual\" = " + shlex.quote(expected_sha256),
+                60,
+            )
+            if verify.returncode != 0:
+                raise RuntimeError("Remote package SHA-256 verification failed.")
+
+        install = "set -eu; " + update["install_command"]
+        install = install.replace("{package}", shlex.quote(package))
+        install_result = remote(install, 600)
+        if install_result.returncode != 0:
+            raise RuntimeError((install_result.stderr or install_result.stdout or "Remote installation failed").strip()[-2000:])
+        return (install_result.stdout or "Deployment completed.").strip()[-2000:]
+    finally:
+        try:
+            cleanup = remote("rm -rf " + shlex.quote(remote_dir), 30)
+            if cleanup.returncode != 0:
+                raise RuntimeError((cleanup.stderr or cleanup.stdout or "Remote cleanup failed").strip()[-1000:])
+        except Exception:
+            # Preserve the original deployment exception while still making cleanup best-effort.
+            pass
 
 def _preflight_target(row, timeout=1.0):
     try:
