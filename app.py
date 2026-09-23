@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import hmac
 import subprocess
 from enhancements import register_enhancements
+from deployment import register_deployment
 
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
 ARCHIVE_ROOT = Path(os.environ.get("MCONTROLLER_ARCHIVE_ROOT", "archives")).resolve()
@@ -55,8 +56,8 @@ def security_headers(response):
 
 ROLES = ("admin", "operator", "viewer")
 ROLE_PERMISSIONS = {
-    "admin": {"view", "manage_users", "manage_computers", "manage_groups", "manage_updates", "scan", "archive", "remote"},
-    "operator": {"view", "manage_computers", "manage_groups", "scan", "archive", "remote"},
+    "admin": {"view", "manage_users", "manage_computers", "manage_groups", "manage_updates", "scan", "archive", "remote", "deploy"},
+    "operator": {"view", "manage_computers", "manage_groups", "scan", "archive", "remote", "deploy"},
     "viewer": {"view"},
 }
 
@@ -642,6 +643,7 @@ def api_groups():
     c.close(); return jsonify(rows)
 
 register_enhancements(app)
+register_deployment(app)
 
 if __name__=="__main__":
     ensure_env_admin()
