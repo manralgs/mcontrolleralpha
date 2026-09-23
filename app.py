@@ -350,6 +350,20 @@ def admin_user_role(account_id):
         c=db(); c.execute("UPDATE accounts SET role=? WHERE id=?",(role,account_id)); c.commit(); c.close()
     return redirect(url_for("admin_users"))
 
+@app.route("/admin/users/<int:account_id>/delete",methods=["POST"])
+@permission_required("manage_users")
+def admin_user_delete(account_id):
+    me=current_account()
+    if me and me["id"]==account_id: return redirect(url_for("admin_users"))
+    c=db()
+    row=c.execute("SELECT role FROM accounts WHERE id=?",(account_id,)).fetchone()
+    if row and row["role"]=="admin":
+        admins=c.execute("SELECT COUNT(*) n FROM accounts WHERE role='admin' AND active=1").fetchone()["n"]
+        if admins<=1:
+            c.close(); return redirect(url_for("admin_users"))
+    c.execute("DELETE FROM accounts WHERE id=?",(account_id,)); c.commit(); c.close()
+    return redirect(url_for("admin_users"))
+
 @app.route("/admin/users/<int:account_id>/toggle",methods=["POST"])
 @permission_required("manage_users")
 def admin_user_toggle(account_id):
