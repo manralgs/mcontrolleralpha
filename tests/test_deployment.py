@@ -2,6 +2,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -57,8 +58,10 @@ class MControllerDeploymentTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         if role != "admin":
             c = sqlite3.connect(self.db)
-            c.execute("INSERT INTO accounts(username,password_hash,role,active) VALUES(?,?,?,1)",
-                      (role, "test-hash", role))
+            c.execute(
+                "INSERT INTO accounts(username,password_hash,role,active,created_at) VALUES(?,?,?,?,?)",
+                (role, "test-hash", role, 1, datetime.now().isoformat(timespec="seconds")),
+            )
             c.commit()
             c.close()
         if role == "admin":
@@ -69,9 +72,9 @@ class MControllerDeploymentTests(unittest.TestCase):
             login_password = "unused"
         if role == "viewer":
             with self.client.session_transaction() as sess:
-                row = sqlite3.connect(self.db).execute(
-                    "SELECT id FROM accounts WHERE username=?", (username,)
-                ).fetchone()
+                db = sqlite3.connect(self.db)
+                row = db.execute("SELECT id FROM accounts WHERE username=?", (username,)).fetchone()
+                db.close()
                 sess["account_id"] = row[0]
         else:
             response = self.client.post("/login", data={
