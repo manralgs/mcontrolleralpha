@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}Connection History · mController{% endblock %}{% block heading %}Connection History{% endblock %}{% block content %}
+<div class="hero compact"><div><span class="eyebrow">REMOTE ACCESS</span><h2>Connection History</h2><p>Recorded results from mapping connectivity tests.</p></div><a class="btn secondary" href="/mapping-center">Mapping Center</a></div>
+<div class="card"><form method="get" class="input-row"><input name="q" value="{{q}}" placeholder="Computer, IP or username"><button class="btn primary">Search</button></form></div>
+<div class="card table-wrap"><table><thead><tr><th>Time</th><th>Computer</th><th>User</th><th>Protocol</th><th>Endpoint</th><th>Result</th><th>Detail</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{r.started_at}}</td><td>{{r.computer}}</td><td>{{r.username}}</td><td>{{r.protocol|upper}}</td><td>{{r.address}}:{{r.port}}</td><td><span class="pill">{{r.result|upper}}</span></td><td><a class="link-btn" href="/connections/{{r.id}}">Details</a></td></tr>{% else %}<tr><td colspan="7" class="empty">No connection history yet.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
