@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block title %}Import Center · mController{% endblock %}{% block heading %}Import Center{% endblock %}{% block content %}
+<div class="hero compact"><div><span class="eyebrow">SAFE IMPORT</span><h2>Preview before changing inventory</h2><p>Validate the file, review changes, then commit them as one transaction.</p></div></div>
+<div class="card"><form method="post" action="/import-center/preview" enctype="multipart/form-data" class="form-grid">
+<label>Object type<select name="kind"><option value="computers" {% if kind=="computers" %}selected{% endif %}>Computers</option><option value="users" {% if kind=="users" %}selected{% endif %}>Remote Users</option><option value="groups" {% if kind=="groups" %}selected{% endif %}>Groups</option></select></label>
+<label>JSON file<input type="file" name="file" accept=".json,application/json" required></label>
+<div><button class="btn primary">Preview Import</button></div>
+</form></div>
+{% endblock %}
