@@ -27,6 +27,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("MCONTROLLER_SECRET_KEY") or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 app.config.update(SESSION_COOKIE_SECURE=os.environ.get("MCONTROLLER_SECURE_COOKIE","0")=="1")
+SERVER_START_ID=secrets.token_hex(8)
 
 @app.context_processor
 def security_context():
@@ -398,6 +399,7 @@ def _start_update_watchdog(backup):
     env["MCONTROLLER_UPDATE_PROJECT"]=str(project)
     env["MCONTROLLER_UPDATE_PORT"]=str(port)
     env["MCONTROLLER_UPDATE_COMMAND"]=os.environ.get("MCONTROLLER_RESTART_COMMAND","").strip()
+    env["MCONTROLLER_UPDATE_OLD_START_ID"]=SERVER_START_ID
     subprocess.Popen([sys.executable,str(watchdog)],env=env,
                      stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
                      start_new_session=True)
@@ -537,7 +539,7 @@ def logout():
 
 @app.route("/healthz")
 def healthz():
-    return jsonify({"status":"ok","service":"mcontroller"}), 200
+    return jsonify({"status":"ok","service":"mcontroller","start_id":SERVER_START_ID}), 200
 
 @app.route("/")
 @permission_required("view")
