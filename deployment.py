@@ -250,7 +250,7 @@ def create_job():
 def job_detail(job_id):
     _init()
     c = conn()
-    job = c.execute("""SELECT j.*,s.name software,s.version,s.platform,s.package_url,s.install_command,
+    job = c.execute("""SELECT j.*,s.name software,s.version,s.platform,s.package_url,s.install_command,s.sha256,
                        a.username FROM deployment_jobs j
                        JOIN software_updates s ON s.id=j.software_update_id
                        LEFT JOIN accounts a ON a.id=j.created_by WHERE j.id=?""", (job_id,)).fetchone()
