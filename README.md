@@ -58,7 +58,16 @@ Remote credentials are not stored or guessed by this application; Guacamole shou
 - Private-network computer discovery with SSH/RDP/VNC port probing and one-click add.
 - Computer ↔ remote-user mappings and reusable computer groups.
 - Apache Guacamole launch point; SSH endpoints also expose system SSH and PuTTY command details.
-- Software Updates page for release/version/platform/package URL/install-command metadata. This build does not execute update commands automatically.
+- Software Updates page for release/version/platform/package URL metadata, with admin-only **Update & Restart**. The update package is a ZIP containing `app.py` and application files; runtime data such as the database, archives, `.env`, `.venv`, and `.git` are preserved. After a successful package replacement, the running server restarts automatically.
+
+### Running-server updates
+
+1. Build a ZIP containing the application files and `app.py` at its root, or inside one top-level project directory.
+2. Add the release under **Software Updates** and provide the package URL.
+3. Click **Update & Restart**. The server downloads the package, rejects path traversal and runtime-data directories, validates `app.py`, replaces application files, and restarts.
+4. For service-managed deployments, set `MCONTROLLER_RESTART_COMMAND` to the service restart command. If it is not set, mController re-executes `app.py` directly.
+
+The existing `install_command` field remains release metadata only; it is not executed by the update engine.
 - Existing SQLite databases receive a lightweight migration for the new computer fields.
 
 ### First login
