@@ -694,6 +694,33 @@ def discovery_dismiss(result_id):
     _discovery_init(); c=conn(); c.execute("UPDATE discovery_results SET status='dismissed' WHERE id=?",(result_id,)); c.commit(); c.close()
     return redirect(url_for("enhancements.discovery"))
 
+
+def _discovery_scheduler_loop():
+    while True:
+        try:
+            _discovery_init()
+            c=conn()
+            jobs=c.execute("SELECT * FROM discovery_jobs WHERE enabled=1 ORDER BY id").fetchall()
+            c.close()
+            now=time.time()
+            for job in jobs:
+                last=0
+                if job["last_run"]:
+                    try: last=datetime.fromisoformat(job["last_run"]).timestamp()
+                    except ValueError: last=0
+                interval=job.get("interval_minutes",60) if hasattr(job,"keys") and "interval_minutes" in job.keys() else 60
+                if now-last >= max(int(interval),5)*60:
+                    try: _run_discovery(job)
+                    except Exception: pass
+            time.sleep(60)
+        except Exception:
+            time.sleep(60)
+
+def _start_discovery_scheduler(app):
+    if getattr(app,"_discovery_scheduler_started",False): return
+    app._discovery_scheduler_started=True
+    threading.Thread(target=_discovery_scheduler_loop,name="discovery-scheduler",daemon=True).start()
+
 def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
