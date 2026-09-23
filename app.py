@@ -109,6 +109,14 @@ def db():
     c.commit()
     return c
 
+def validate_password_policy(password):
+    if len(password) < 12: return "Password must be at least 12 characters."
+    if not any(ch.isupper() for ch in password): return "Password must contain an uppercase letter."
+    if not any(ch.islower() for ch in password): return "Password must contain a lowercase letter."
+    if not any(ch.isdigit() for ch in password): return "Password must contain a digit."
+    if not any(not ch.isalnum() for ch in password): return "Password must contain a special character."
+    return None
+
 def hash_password(password):
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310000)
@@ -379,8 +387,10 @@ def setup():
         username=request.form.get("username","").strip()
         password=request.form.get("password","")
         confirm=request.form.get("confirm","")
-        if len(username)<3 or len(password)<10:
-            error="Username must be at least 3 characters and password at least 10 characters."
+        if len(username)<3:
+            error="Username must be at least 3 characters."
+        elif validate_password_policy(password):
+            error=validate_password_policy(password)
         elif password!=confirm:
             error="Passwords do not match."
         else:
@@ -432,7 +442,10 @@ def login():
         c=db(); row=c.execute("SELECT * FROM accounts WHERE username=? AND active=1",(username,)).fetchone(); c.close()
         if row and verify_password(password,row["password_hash"]):
             _clear_login_failures()
-            session.clear(); session["account_id"]=row["id"]
+            session.clear()
+            session.permanent=False
+            session["account_id"]=row["id"]
+            session["authenticated_at"]=datetime.now().isoformat(timespec="seconds")
             return redirect(safe_next_url(request.form.get("next") or request.args.get("next")))
         _record_login_failure()
         error="Invalid username or password."
