@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Health History · mController{% endblock %}{% block heading %}Health History{% endblock %}{% block content %}
+<div class="hero compact"><div><span class="eyebrow">MONITORING</span><h2>{{computer.name}}</h2><p>{{computer.address}}:{{computer.port}} · {{computer.protocol|upper}}</p></div><a class="btn secondary" href="/health">Back</a></div>
+<div class="card table-wrap"><table><thead><tr><th>Time</th><th>Status</th><th>Latency</th><th>Detail</th></tr></thead><tbody>{% for r in history %}<tr><td>{{r.checked_at}}</td><td><span class="pill">{{r.status|upper}}</span></td><td>{% if r.latency_ms is not none %}{{r.latency_ms}} ms{% else %}—{% endif %}</td><td>{{r.detail}}</td></tr>{% else %}<tr><td colspan="4" class="empty">No health history yet.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
