@@ -3,7 +3,7 @@ import json
 import sqlite3
 from datetime import datetime
 from functools import wraps
-from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort, Response
 
 enhancements = Blueprint("enhancements", __name__)
 
@@ -372,7 +372,7 @@ def mapping_export():
     rows=mapping_rows(c)
     payload={"type":"mcontroller-mappings","version":1,"items":[{"computer":r["computer"],"user":r["username"]} for r in rows]}
     c.close()
-    response=app.response_class(json.dumps(payload,indent=2),mimetype="application/json")
+    response=Response(json.dumps(payload,indent=2),mimetype="application/json")
     response.headers["Content-Disposition"]="attachment; filename=mcontroller-mappings.json"
     return response
 
