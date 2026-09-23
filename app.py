@@ -1,24 +1,33 @@
-from flask import Flask, jsonify, request, render_template_string, redirect, url_for
+from flask import Flask, jsonify, request, render_template_string, redirect, url_for, send_from_directory, abort
 import os
 import sqlite3
+import zipfile
+from pathlib import Path
+from datetime import datetime
 
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
+ARCHIVE_ROOT = Path(os.environ.get("MCONTROLLER_ARCHIVE_ROOT", "archives")).resolve()
 app = Flask(__name__)
 
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>mController</title>
 <style>
 body{font-family:system-ui;margin:0;background:#f5f7fb;color:#172033}
-nav{padding:16px 24px;background:#172033;color:white}main{max-width:1100px;margin:24px auto;padding:0 16px}
+nav{padding:16px 24px;background:#172033;color:white}nav a{margin-right:14px}
+main{max-width:1100px;margin:24px auto;padding:0 16px}
 .card{background:white;padding:18px;margin:14px 0;border-radius:10px;box-shadow:0 2px 8px #0001}
 table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #ddd;text-align:left}
 input,select,button{padding:8px;margin:4px}button{cursor:pointer}
-a{color:#1769aa;text-decoration:none}
+a{color:#1769aa;text-decoration:none}.error{color:#a00}.ok{color:#176b3a}
+code{background:#eef1f5;padding:2px 5px;border-radius:4px}
 </style></head><body>
-<nav><b>mController</b> &nbsp; <a href="/" style="color:white">Dashboard</a> &nbsp;
-<a href="/computers" style="color:white">Computers</a> &nbsp;
-<a href="/users" style="color:white">Users</a> &nbsp;
-<a href="/mappings" style="color:white">Mappings</a></nav>
+<nav><b>mController</b> &nbsp;
+<a href="/" style="color:white">Dashboard</a>
+<a href="/computers" style="color:white">Computers</a>
+<a href="/users" style="color:white">Users</a>
+<a href="/mappings" style="color:white">Mappings</a>
+<a href="/archives" style="color:white">Archives</a>
+</nav>
 <main>{{body|safe}}</main></body></html>"""
 
 def db():
@@ -43,18 +52,53 @@ def db():
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE(computer_id,user_id)
     );
+    CREATE TABLE IF NOT EXISTS archives(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_path TEXT NOT NULL,
+      zip_name TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      size INTEGER NOT NULL DEFAULT 0
+    );
     """)
     return c
 
 def page(body):
     return render_template_string(PAGE, body=body)
 
+def safe_zip_name(name):
+    return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("..", "_")
+
+def create_zip_from_path(source):
+    source = Path(source).expanduser().resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"Path does not exist: {source}")
+
+    ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = safe_zip_name(source.name or "root")
+    zip_name = f"{base}_{stamp}.zip"
+    target = ARCHIVE_ROOT / zip_name
+
+    if source.is_file():
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(source, source.name)
+    else:
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in source.rglob("*"):
+                if p.is_file():
+                    zf.write(p, p.relative_to(source.parent))
+
+    return source, target
+
 @app.route("/")
 def index():
-    c=db()
-    counts={k:c.execute(f"SELECT COUNT(*) n FROM {k}").fetchone()["n"] for k in ("computers","users","mappings")}
+    c = db()
+    counts={k:c.execute(f"SELECT COUNT(*) n FROM {k}").fetchone()["n"] for k in ("computers","users","mappings","archives")}
     c.close()
-    return page(f"<h1>Dashboard</h1><div class='card'>Computers: {counts['computers']}<br>Users: {counts['users']}<br>Mappings: {counts['mappings']}</div>")
+    return page(f"""<h1>Dashboard</h1><div class='card'>
+    Computers: {counts['computers']}<br>Users: {counts['users']}<br>
+    Mappings: {counts['mappings']}<br>Archives: {counts['archives']}
+    </div>""")
 
 @app.route("/computers", methods=["GET","POST"])
 def computers():
@@ -134,7 +178,6 @@ def guacamole(mapping_id):
                    JOIN users u ON u.id=m.user_id WHERE m.id=?""",(mapping_id,)).fetchone()
     c.close()
     if not r: return "Mapping not found",404
-    # The Guacamole URL is intentionally configurable; credentials are never stored here.
     base=os.environ.get("GUACAMOLE_URL","http://localhost:8080/guacamole/")
     return page(f"""<h1>Apache Guacamole</h1><div class='card'>
     <p>Computer: <b>{r['name']}</b> ({r['address']})</p>
@@ -142,6 +185,64 @@ def guacamole(mapping_id):
     <p>Configure the corresponding RDP/SSH/VNC connection in Apache Guacamole, then open:</p>
     <p><a href="{base}" target="_blank">{base}</a></p>
     </div>""")
+
+@app.route("/archives", methods=["GET","POST"])
+def archives():
+    message = ""
+    if request.method == "POST":
+        source = request.form.get("source_path", "").strip()
+        try:
+            source_path, target = create_zip_from_path(source)
+            size = target.stat().st_size
+            c = db()
+            c.execute("INSERT INTO archives(source_path,zip_name,created_at,size) VALUES(?,?,?,?)",
+                      (str(source_path), target.name, datetime.now().isoformat(timespec="seconds"), size))
+            c.commit()
+            c.close()
+            message = f"<p class='ok'>Created ZIP: <a href='/archive/{target.name}'>{target.name}</a></p>"
+        except Exception as exc:
+            message = f"<p class='error'>Archive failed: {exc}</p>"
+
+    c = db()
+    rows = c.execute("SELECT * FROM archives ORDER BY id DESC").fetchall()
+    c.close()
+    body = f"""<h1>Path Archive</h1>
+    <div class="card">
+      <form method="post">
+        <label>Local file or directory path:</label><br>
+        <input name="source_path" style="width:75%" placeholder="C:\\ProgramData\\Quest\\KACE\\user" required>
+        <button type="submit">Create ZIP</button>
+      </form>
+      <p>Archives are stored under <code>{ARCHIVE_ROOT}</code>.</p>
+      {message}
+    </div>
+    <div class="card"><h2>Browserable Archives</h2>
+    <table><tr><th>Source</th><th>Created</th><th>Size</th><th>Link</th></tr>"""
+    body += "".join(
+        f"<tr><td><code>{r['source_path']}</code></td><td>{r['created_at']}</td>"
+        f"<td>{r['size']:,} bytes</td><td><a href='/archive/{r['zip_name']}'>Browse / download</a></td></tr>"
+        for r in rows
+    )
+    return page(body + "</table></div>")
+
+@app.route("/archive/<path:filename>")
+def archive_file(filename):
+    safe = Path(filename).name
+    if safe != filename:
+        abort(404)
+    target = ARCHIVE_ROOT / safe
+    if not target.is_file():
+        abort(404)
+    return send_from_directory(ARCHIVE_ROOT, safe, as_attachment=False)
+
+@app.route("/api/archives")
+def api_archives():
+    c=db()
+    rows=[dict(r) for r in c.execute("SELECT * FROM archives ORDER BY id DESC")]
+    c.close()
+    for r in rows:
+        r["url"] = url_for("archive_file", filename=r["zip_name"], _external=False)
+    return jsonify(rows)
 
 @app.route("/api/computers")
 def api_computers():
