@@ -302,6 +302,15 @@ def _download_update_package(package_url):
     Path(path).write_bytes(data)
     return Path(path)
 
+def _validate_update_package_file(package):
+    if package.stat().st_size > UPDATE_MAX_PACKAGE_BYTES:
+        raise ValueError("Update package exceeds the 250 MB limit.")
+    digest=_update_sha256(package)
+    expected=os.environ.get("MCONTROLLER_UPDATE_SHA256","").strip().lower()
+    if expected and digest.lower()!=expected:
+        raise ValueError("Update package SHA-256 does not match MCONTROLLER_UPDATE_SHA256.")
+    return digest
+
 def _stage_update(package_path):
     stage=Path(tempfile.mkdtemp(prefix="mcontroller-update-stage-"))
     try:
@@ -352,6 +361,7 @@ def perform_update(package_url):
     stage=None
     try:
         package=_download_update_package(package_url)
+        _validate_update_package_file(package)
         stage,root=_stage_update(package)
         _apply_update(root)
         threading.Thread(target=_restart_server,daemon=True).start()
