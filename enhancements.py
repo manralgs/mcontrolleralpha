@@ -787,6 +787,19 @@ def _record_connection(mapping_id, result, detail):
               (mapping["id"],mapping["computer_id"],mapping["user_id"],now,now,result,mapping["protocol"],mapping["address"],mapping["port"],detail))
     c.commit(); c.close()
 
+def security_audit_cleanup():
+    c=conn()
+    c.execute("DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT 5000)")
+    c.commit(); c.close()
+
+@enhancements.route("/audit/retention",methods=["POST"])
+@require("manage_updates")
+def audit_retention():
+    security_audit_cleanup()
+    write_audit("audit_retention","audit_log",details={"retained":"5000 newest records"})
+    flash("Audit log retention cleanup completed.")
+    return redirect(url_for("enhancements.audit"))
+
 def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
