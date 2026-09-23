@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import time
+import json
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -25,12 +26,15 @@ def _restart(project):
     script = Path(project) / "app.py"
     subprocess.Popen([sys.executable, str(script)], start_new_session=True)
 
-def _healthy(port):
+def _health_start_id(port):
     try:
         with urlopen(f"http://127.0.0.1:{port}/healthz", timeout=2) as response:
-            return response.status == 200
+            if response.status != 200:
+                return None
+            payload = json.loads(response.read().decode("utf-8"))
+            return payload.get("start_id")
     except Exception:
-        return False
+        return None
 
 def main():
     backup = os.environ.get("MCONTROLLER_UPDATE_BACKUP", "").strip()
@@ -38,9 +42,11 @@ def main():
     port = int(os.environ.get("MCONTROLLER_UPDATE_PORT", "5000"))
     if not backup or not project:
         return
+    old_start_id = os.environ.get("MCONTROLLER_UPDATE_OLD_START_ID", "")
     deadline = time.time() + 45
     while time.time() < deadline:
-        if _healthy(port):
+        start_id = _health_start_id(port)
+        if start_id and start_id != old_start_id:
             shutil.rmtree(backup, ignore_errors=True)
             return
         time.sleep(1)
