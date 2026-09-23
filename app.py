@@ -565,12 +565,50 @@ def index():
     c.close()
     return render_template("dashboard.html",counts=counts,health=health,pending_discovery=pending_discovery,
                            orphan_computers=orphan_computers,orphan_users=orphan_users,recent_connections=recent_connections)
-te("INSERT INTO archives(source_path,zip_name,created_at,size) VALUES(?,?,?,?)",
-                              (str(source_path),target.name,datetime.now().isoformat(timespec="seconds"),target.stat().st_size)); c.commit(); c.close()
+@app.route("/archives", methods=["GET","POST"])
+@permission_required("archive")
+def archives():
+    message=None
+    error=False
+    if request.method=="POST":
+        source_path=request.form.get("source_path","").strip()
+        try:
+            source,target=create_zip_from_path(source_path)
+            c=db()
+            c.execute("INSERT INTO archives(source_path,zip_name,created_at,size) VALUES(?,?,?,?)",
+                      (str(source),target.name,datetime.now().isoformat(timespec="seconds"),target.stat().st_size))
+            c.commit()
+            c.close()
             message=f"Created ZIP: <a href='/archive/{target.name}' target='_blank'>{target.name}</a>"
-        except Exception as exc: error=True; message=f"Archive failed: {exc}"
-    c=db(); rows=c.execute("SELECT * FROM archives ORDER BY id DESC").fetchall(); c.close()
+        except Exception as exc:
+            error=True
+            message=f"Archive failed: {exc}"
+    c=db()
+    rows=c.execute("SELECT * FROM archives ORDER BY id DESC").fetchall()
+    c.close()
     return render_template("archives.html",rows=rows,archive_root=ARCHIVE_ROOT,message=message,error=error)
+
+@app.route("/archives/<int:archive_id>/delete", methods=["POST"])
+@permission_required("archive")
+def archive_delete(archive_id):
+    c=db()
+    row=c.execute("SELECT * FROM archives WHERE id=?", (archive_id,)).fetchone()
+    if not row:
+        c.close()
+        abort(404)
+    target=(ARCHIVE_ROOT/row["zip_name"]).resolve()
+    root=ARCHIVE_ROOT.resolve()
+    if target.parent != root or not target.is_file():
+        c.close()
+        abort(404)
+    try:
+        target.unlink()
+        c.execute("DELETE FROM archives WHERE id=?", (archive_id,))
+        c.commit()
+    finally:
+        c.close()
+    flash("Archive deleted.")
+    return redirect(url_for("archives"))
 
 @app.route("/archive/<path:filename>")
 @permission_required("archive")
