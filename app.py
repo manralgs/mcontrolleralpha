@@ -3,6 +3,12 @@ from functools import wraps
 import os
 import sqlite3
 import zipfile
+import shutil
+import tempfile
+import urllib.request
+import sys
+import threading
+import time
 import ipaddress
 import socket
 import secrets
@@ -136,6 +142,90 @@ def ensure_env_admin():
     c.execute("INSERT OR IGNORE INTO accounts(username,password_hash,role,active,created_at) VALUES(?,?,?,?,?)",
               (username,hash_password(os.environ["MCONTROLLER_ADMIN_PASSWORD"]),"admin",1,datetime.now().isoformat(timespec="seconds")))
     c.commit(); c.close()
+
+UPDATE_EXCLUDED_NAMES = {".git", ".venv", "__pycache__", "mcontroller.db", "archives", "runtime", ".env"}
+
+def _validate_update_member(name):
+    p=Path(name)
+    if p.is_absolute() or ".." in p.parts:
+        raise ValueError(f"Unsafe update path: {name}")
+    if any(part in UPDATE_EXCLUDED_NAMES for part in p.parts):
+        raise ValueError(f"Update package contains excluded runtime path: {name}")
+
+def _download_update_package(package_url):
+    if not package_url:
+        raise ValueError("Package URL is required.")
+    parsed=urlparse(package_url)
+    if parsed.scheme not in {"http","https"}:
+        raise ValueError("Update package URL must use HTTP or HTTPS.")
+    with urllib.request.urlopen(package_url, timeout=60) as response:
+        data=response.read()
+    if len(data) > 250 * 1024 * 1024:
+        raise ValueError("Update package is larger than the 250 MB limit.")
+    fd,path=tempfile.mkstemp(prefix="mcontroller-update-",suffix=".zip")
+    os.close(fd)
+    Path(path).write_bytes(data)
+    return Path(path)
+
+def _stage_update(package_path):
+    stage=Path(tempfile.mkdtemp(prefix="mcontroller-update-stage-"))
+    try:
+        with zipfile.ZipFile(package_path) as zf:
+            total_uncompressed=0
+            for member in zf.infolist():
+                _validate_update_member(member.filename)
+                total_uncompressed += member.file_size
+                if total_uncompressed > 1024 * 1024 * 1024:
+                    raise ValueError("Update package expands beyond the 1 GB limit.")
+            zf.extractall(stage)
+        root=stage
+        if not (root/"app.py").is_file():
+            candidates=[p for p in root.iterdir() if p.is_dir() and (p/"app.py").is_file()]
+            if len(candidates)==1:
+                root=candidates[0]
+        if not (root/"app.py").is_file():
+            raise ValueError("Update package must contain app.py.")
+        return stage,root
+    except Exception:
+        shutil.rmtree(stage,ignore_errors=True)
+        raise
+
+def _apply_update(root):
+    project=Path(__file__).resolve().parent
+    for source in root.rglob("*"):
+        relative=source.relative_to(root)
+        if any(part in UPDATE_EXCLUDED_NAMES for part in relative.parts):
+            continue
+        target=project/relative
+        if source.is_dir():
+            target.mkdir(parents=True,exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(source,target)
+
+def _restart_server():
+    time.sleep(0.75)
+    command=os.environ.get("MCONTROLLER_RESTART_COMMAND","").strip()
+    if command:
+        os.system(command)
+        return
+    script=Path(__file__).resolve()
+    os.execv(sys.executable,[sys.executable,str(script),*sys.argv[1:]])
+
+def perform_update(package_url):
+    package=None
+    stage=None
+    try:
+        package=_download_update_package(package_url)
+        stage,root=_stage_update(package)
+        _apply_update(root)
+        threading.Thread(target=_restart_server,daemon=True).start()
+        return True,"Update applied. The server is restarting now."
+    finally:
+        if package:
+            package.unlink(missing_ok=True)
+        if stage:
+            shutil.rmtree(stage,ignore_errors=True)
 
 def safe_zip_name(name):
     return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("..", "_")
@@ -460,6 +550,21 @@ def update_release(item_id):
 @permission_required("manage_updates")
 def delete_release(item_id):
     c=db(); c.execute("DELETE FROM software_updates WHERE id=?",(item_id,)); c.commit(); c.close(); return redirect(url_for("updates"))
+
+@app.route("/updates/<int:item_id>/apply",methods=["POST"])
+@permission_required("manage_updates")
+def apply_release(item_id):
+    c=db(); row=c.execute("SELECT * FROM software_updates WHERE id=?",(item_id,)).fetchone(); c.close()
+    if not row:
+        flash("Update release not found.")
+        return redirect(url_for("updates"))
+    try:
+        perform_update(row["package_url"])
+        flash("Update applied. The server is restarting now.")
+    except Exception as exc:
+        flash(f"Update failed: {exc}")
+    return redirect(url_for("updates"))
+
 
 @app.route("/archives/<int:item_id>/delete",methods=["POST"])
 @permission_required("archive")
