@@ -98,13 +98,17 @@ def db():
     CREATE TABLE IF NOT EXISTS software_updates(
       id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,version TEXT NOT NULL,
       platform TEXT NOT NULL DEFAULT 'Windows',package_url TEXT,install_command TEXT,
-      release_notes TEXT,created_at TEXT NOT NULL
+      release_notes TEXT,created_at TEXT NOT NULL,
+      sha256 TEXT
     );
     CREATE TABLE IF NOT EXISTS server_settings(
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT ''
     );
     """)
+    existing_updates={row["name"] for row in c.execute("PRAGMA table_info(software_updates)").fetchall()}
+    if "sha256" not in existing_updates:
+        c.execute("ALTER TABLE software_updates ADD COLUMN sha256 TEXT")
     # Lightweight schema migration for databases created by earlier mController builds.
     existing={row["name"] for row in c.execute("PRAGMA table_info(computers)").fetchall()}
     for column, definition in (("os", "TEXT NOT NULL DEFAULT 'Windows'"),("status", "TEXT NOT NULL DEFAULT 'unknown'"),("last_seen", "TEXT")):
@@ -587,6 +591,76 @@ def archives():
     rows=c.execute("SELECT * FROM archives ORDER BY id DESC").fetchall()
     c.close()
     return render_template("archives.html",rows=rows,archive_root=ARCHIVE_ROOT,message=message,error=error)
+
+@app.route("/updates", methods=["GET","POST"])
+@permission_required("manage_updates")
+def updates():
+    c=db()
+    if request.method=="POST":
+        name=request.form.get("name","").strip()
+        version=request.form.get("version","").strip()
+        platform=request.form.get("platform","Windows").strip()
+        package_url=request.form.get("package_url","").strip()
+        install_command=request.form.get("install_command","").strip()
+        release_notes=request.form.get("release_notes","").strip()
+        sha256=request.form.get("sha256","").strip().lower() or None
+        if sha256 and (len(sha256)!=64 or any(ch not in "0123456789abcdef" for ch in sha256)):
+            flash("SHA-256 must be exactly 64 hexadecimal characters.")
+        elif not name or not version or not package_url:
+            flash("Software, version, and package URL are required.")
+        else:
+            c.execute("""INSERT INTO software_updates
+                (name,version,platform,package_url,install_command,release_notes,created_at,sha256)
+                VALUES(?,?,?,?,?,?,?,?)""",
+                (name,version,platform,package_url,install_command,release_notes,
+                 datetime.now().isoformat(timespec="seconds"),sha256))
+            c.commit(); flash("Software release added.")
+        c.close()
+        return redirect(url_for("updates"))
+    rows=c.execute("SELECT * FROM software_updates ORDER BY name,version DESC").fetchall()
+    c.close()
+    return render_template("updates.html",rows=rows)
+
+@app.route("/updates/<int:update_id>/update", methods=["POST"])
+@permission_required("manage_updates")
+def update_release(update_id):
+    fields=("name","version","platform","package_url","install_command","release_notes")
+    values=[request.form.get(k,"").strip() for k in fields]
+    sha256=request.form.get("sha256","").strip().lower() or None
+    if sha256 and (len(sha256)!=64 or any(ch not in "0123456789abcdef" for ch in sha256)):
+        flash("SHA-256 must be exactly 64 hexadecimal characters.")
+        return redirect(url_for("updates"))
+    c=db()
+    c.execute("""UPDATE software_updates SET name=?,version=?,platform=?,package_url=?,
+                 install_command=?,release_notes=?,sha256=? WHERE id=?""",(*values,sha256,update_id))
+    c.commit(); c.close()
+    flash("Software release updated.")
+    return redirect(url_for("updates"))
+
+@app.route("/updates/<int:update_id>/delete", methods=["POST"])
+@permission_required("manage_updates")
+def delete_release(update_id):
+    c=db()
+    c.execute("DELETE FROM software_updates WHERE id=?",(update_id,))
+    c.commit(); c.close()
+    flash("Software release deleted.")
+    return redirect(url_for("updates"))
+
+@app.route("/updates/<int:update_id>/apply", methods=["POST"])
+@permission_required("manage_updates")
+def apply_release(update_id):
+    c=db()
+    row=c.execute("SELECT * FROM software_updates WHERE id=?",(update_id,)).fetchone()
+    c.close()
+    if not row or not row["package_url"]:
+        flash("Software release package is missing.")
+        return redirect(url_for("updates"))
+    try:
+        perform_update(row["package_url"])
+        flash("Update applied; server restart initiated.")
+    except Exception as exc:
+        flash("Update failed: "+str(exc))
+    return redirect(url_for("updates"))
 
 @app.route("/archives/<int:archive_id>/delete", methods=["POST"])
 @permission_required("archive")
