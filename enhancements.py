@@ -518,7 +518,10 @@ def backup_restore_commit(name):
             for row in tables["server_settings"]:
                 c.execute("INSERT INTO server_settings VALUES (?,?)",tuple(row.values()))
             for row in tables["software_updates"]:
-                c.execute("INSERT INTO software_updates VALUES (?,?,?,?,?,?,?)",tuple(row.values()))
+                c.execute("""INSERT INTO software_updates
+                    (id,name,version,platform,package_url,install_command,release_notes,created_at,sha256)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    tuple(row.get(k) for k in ("id","name","version","platform","package_url","install_command","release_notes","created_at","sha256")))
             c.commit()
         except Exception:
             c.rollback(); raise
