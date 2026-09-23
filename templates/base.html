@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}mController{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head><body>
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand"><span class="brand-mark">M</span><div><b>mController</b><small>Control Center</small></div></div>
+  <nav>
+    <a class="{{ 'active' if request.path=='/' else '' }}" href="/">⌂ <span>Dashboard</span></a>
+    <a class="{{ 'active' if request.path.startswith('/computers') else '' }}" href="/computers">▣ <span>Computers</span></a>
+    <a class="{{ 'active' if request.path.startswith('/users') else '' }}" href="/users">♙ <span>Users</span></a>
+    <a class="{{ 'active' if request.path.startswith('/mappings') else '' }}" href="/mappings">⇄ <span>Mappings</span></a>
+    <a class="{{ 'active' if request.path.startswith('/archives') else '' }}" href="/archives">▤ <span>Archives</span></a>
+  </nav>
+  <div class="side-footer">mController Alpha<br><span>Secure administration console</span></div>
+</aside>
+<section class="content">
+<header class="topbar"><div><span class="eyebrow">MANAGEMENT</span><h1>{% block heading %}Dashboard{% endblock %}</h1></div>
+<div class="status"><i></i> Server online</div></header>
+<main>{% block content %}{% endblock %}</main>
+</section></div>
+</body></html>
