@@ -24,6 +24,7 @@ from enhancements import register_enhancements
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
 ARCHIVE_ROOT = Path(os.environ.get("MCONTROLLER_ARCHIVE_ROOT", "archives")).resolve()
 app = Flask(__name__)
+app.config["TESTING"] = os.environ.get("MCONTROLLER_TESTING", "0") == "1"
 app.secret_key = os.environ.get("MCONTROLLER_SECRET_KEY") or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 app.config.update(SESSION_COOKIE_SECURE=os.environ.get("MCONTROLLER_SECURE_COOKIE","0")=="1")
