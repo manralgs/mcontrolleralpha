@@ -158,8 +158,175 @@ def audit():
     return render_template("audit.html", rows=rows, actions=actions, users=users,
                            action=action, username=username, q=q, page=page, pages=pages, total=total)
 
+
+def ensure_import_tables():
+    c = conn()
+    c.execute("""CREATE TABLE IF NOT EXISTS import_jobs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        account_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'preview'
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_import_jobs_account ON import_jobs(account_id)")
+    c.commit()
+    c.close()
+
+def _permission_for_kind(kind):
+    return {"computers":"manage_computers","users":"manage_users","groups":"manage_groups"}[kind]
+
+def _load_import_payload(uploaded, kind):
+    if not uploaded:
+        raise ValueError("Select a JSON file.")
+    try:
+        payload=json.loads(uploaded.read().decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Invalid JSON: {exc}")
+    expected={"computers":"mcontroller-computers","users":"mcontroller-users","groups":"mcontroller-groups"}[kind]
+    if not isinstance(payload, dict) or payload.get("type") != expected or payload.get("version") != 1:
+        raise ValueError("Import file does not match the selected object type.")
+    if not isinstance(payload.get("items"), list):
+        raise ValueError("Import file items must be an array.")
+    return payload
+
+def _preview_import(payload, kind):
+    c=conn()
+    new=updated=unchanged=invalid=0
+    errors=[]
+    for i,item in enumerate(payload["items"],1):
+        try:
+            if kind=="computers":
+                name=str(item.get("name","")).strip()
+                address=str(item.get("address","")).strip()
+                if not name or not address:
+                    raise ValueError("name and address are required")
+                existing=c.execute("SELECT address,protocol,port,os,status,last_seen FROM computers WHERE name=?",(name,)).fetchone()
+                normalized=(address,item.get("protocol","rdp"),int(item.get("port",3389)),item.get("os","Windows"),item.get("status","unknown"),item.get("last_seen"))
+                if not existing: new+=1
+                elif tuple(existing)==normalized: unchanged+=1
+                else: updated+=1
+            elif kind=="users":
+                username=str(item.get("username","")).strip()
+                if not username: raise ValueError("username is required")
+                existing=c.execute("SELECT display_name FROM users WHERE username=?",(username,)).fetchone()
+                value=item.get("display_name","")
+                if not existing: new+=1
+                elif (existing["display_name"] or "")==(value or ""): unchanged+=1
+                else: updated+=1
+            else:
+                name=str(item.get("name","")).strip()
+                if not name: raise ValueError("group name is required")
+                existing=c.execute("SELECT description FROM computer_groups WHERE name=?",(name,)).fetchone()
+                if not existing: new+=1
+                elif (existing["description"] or "")==(item.get("description","") or ""): unchanged+=1
+                else: updated+=1
+        except Exception as exc:
+            invalid+=1
+            if len(errors)<25: errors.append({"row":i,"error":str(exc)})
+    c.close()
+    return {"new":new,"updated":updated,"unchanged":unchanged,"invalid":invalid,"errors":errors,"total":len(payload["items"])}
+
+@enhancements.route("/import-center")
+def import_center():
+    account=current_user()
+    if not account: return redirect(url_for("login",next=request.path))
+    kind=request.args.get("kind","computers")
+    if kind not in {"computers","users","groups"}: abort(404)
+    if _permission_for_kind(kind) not in {"view","manage_computers","manage_users","manage_groups"}:
+        abort(403)
+    return render_template("import_center.html",kind=kind)
+
+@enhancements.route("/import-center/preview",methods=["POST"])
+def import_preview():
+    account=current_user()
+    if not account: return redirect(url_for("login",next=request.path))
+    kind=request.form.get("kind","")
+    if kind not in {"computers","users","groups"}: abort(404)
+    perm=_permission_for_kind(kind)
+    roles={"admin":{"manage_computers","manage_users","manage_groups"},"operator":{"manage_computers","manage_groups"},"viewer":set()}
+    if perm not in roles.get(account["role"],set()): return render_template("forbidden.html",permission=perm),403
+    try:
+        payload=_load_import_payload(request.files.get("file"),kind)
+        summary=_preview_import(payload,kind)
+        c=conn()
+        c.execute("INSERT INTO import_jobs(created_at,account_id,kind,payload,summary,status) VALUES(?,?,?,?,?,?)",
+                  (datetime.now().isoformat(timespec="seconds"),account["id"],kind,json.dumps(payload),json.dumps(summary),"preview"))
+        job_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+        c.commit(); c.close()
+        write_audit("import_preview",kind,job_id,details=summary)
+        return redirect(url_for("enhancements.import_job",job_id=job_id))
+    except Exception as exc:
+        flash(f"Import preview failed: {exc}")
+        return redirect(url_for("enhancements.import_center",kind=kind))
+
+@enhancements.route("/import-center/job/<int:job_id>")
+def import_job(job_id):
+    account=current_user()
+    if not account: return redirect(url_for("login",next=request.path))
+    c=conn()
+    job=c.execute("SELECT * FROM import_jobs WHERE id=?",(job_id,)).fetchone()
+    c.close()
+    if not job: abort(404)
+    if job["account_id"]!=account["id"] and account["role"]!="admin": return render_template("forbidden.html",permission="own import job"),403
+    return render_template("import_preview.html",job=job,summary=json.loads(job["summary"]))
+
+@enhancements.route("/import-center/job/<int:job_id>/commit",methods=["POST"])
+def import_commit(job_id):
+    account=current_user()
+    if not account: return redirect(url_for("login",next=request.path))
+    c=conn()
+    job=c.execute("SELECT * FROM import_jobs WHERE id=?",(job_id,)).fetchone()
+    if not job: c.close(); abort(404)
+    if job["account_id"]!=account["id"] and account["role"]!="admin": c.close(); return render_template("forbidden.html",permission="own import job"),403
+    perm=_permission_for_kind(job["kind"])
+    roles={"admin":{"manage_computers","manage_users","manage_groups"},"operator":{"manage_computers","manage_groups"},"viewer":set()}
+    if perm not in roles.get(account["role"],set()): c.close(); return render_template("forbidden.html",permission=perm),403
+    if job["status"]!="preview": c.close(); flash("This import job has already been processed."); return redirect(url_for("enhancements.import_center",kind=job["kind"]))
+    payload=json.loads(job["payload"])
+    try:
+        if job["kind"]=="computers":
+            for item in payload["items"]:
+                name=str(item.get("name","")).strip()
+                address=str(item.get("address","")).strip()
+                if not name or not address: continue
+                c.execute("""INSERT INTO computers(name,address,protocol,port,os,status,last_seen) VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(name) DO UPDATE SET address=excluded.address,protocol=excluded.protocol,port=excluded.port,
+                    os=excluded.os,status=excluded.status,last_seen=excluded.last_seen""",
+                    (name,address,item.get("protocol","rdp"),int(item.get("port",3389)),item.get("os","Windows"),item.get("status","unknown"),item.get("last_seen")))
+        elif job["kind"]=="users":
+            for item in payload["items"]:
+                username=str(item.get("username","")).strip()
+                if username:
+                    c.execute("""INSERT INTO users(username,display_name) VALUES(?,?)
+                        ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name""",(username,item.get("display_name","")))
+        else:
+            for item in payload["items"]:
+                name=str(item.get("name","")).strip()
+                if not name: continue
+                c.execute("""INSERT INTO computer_groups(name,description) VALUES(?,?)
+                    ON CONFLICT(name) DO UPDATE SET description=excluded.description""",(name,item.get("description","")))
+                gid=c.execute("SELECT id FROM computer_groups WHERE name=?",(name,)).fetchone()["id"]
+                for member in item.get("members",[]):
+                    comp=c.execute("SELECT id FROM computers WHERE name=?",(member.get("computer"),)).fetchone()
+                    user=c.execute("SELECT id FROM users WHERE username=?",(member.get("username"),)).fetchone()
+                    if not comp or not user: continue
+                    c.execute("INSERT OR IGNORE INTO mappings(computer_id,user_id) VALUES(?,?)",(comp["id"],user["id"]))
+                    mid=c.execute("SELECT id FROM mappings WHERE computer_id=? AND user_id=?",(comp["id"],user["id"])).fetchone()["id"]
+                    c.execute("INSERT OR IGNORE INTO computer_group_mappings(group_id,mapping_id) VALUES(?,?)",(gid,mid))
+        c.execute("UPDATE import_jobs SET status='committed' WHERE id=?",(job_id,))
+        c.commit(); c.close()
+        write_audit("import_commit",job["kind"],job_id,details=json.loads(job["summary"]))
+        flash(f"{job['kind'].title()} import committed successfully.")
+    except Exception as exc:
+        c.rollback(); c.close()
+        flash(f"Import failed and was rolled back: {exc}")
+    return redirect(url_for("enhancements.import_center",kind=job["kind"]))
+
 def register_enhancements(app):
     ensure_tables()
+    ensure_import_tables()
     app.register_blueprint(enhancements)
 
     @app.after_request
