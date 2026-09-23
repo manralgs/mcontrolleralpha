@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Audit Log · mController{% endblock %}
+{% block heading %}Audit Log{% endblock %}
+{% block content %}
+<div class="hero compact"><div><span class="eyebrow">ACCOUNTABILITY</span><h2>Administrative activity history</h2><p>{{total}} recorded event(s).</p></div><a class="btn secondary" href="/operations">Operations</a></div>
+<div class="card"><form method="get" class="form-grid">
+<label>Search<input name="q" value="{{q}}" placeholder="Path, object or details"></label>
+<label>Action<select name="action"><option value="">All actions</option>{% for x in actions %}<option value="{{x}}" {% if x==action %}selected{% endif %}>{{x}}</option>{% endfor %}</select></label>
+<label>User<select name="username"><option value="">All users</option>{% for x in users %}<option value="{{x}}" {% if x==username %}selected{% endif %}>{{x}}</option>{% endfor %}</select></label>
+<div><button class="btn primary">Filter</button> <a class="btn secondary" href="/audit">Reset</a></div>
+</form></div>
+<div class="card table-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Object</th><th>Path</th><th>Result</th><th>Details</th></tr></thead>
+<tbody>{% for r in rows %}<tr><td>{{r.created_at}}</td><td>{{r.username or 'system'}}</td><td><b>{{r.action}}</b></td><td>{{r.object_type or '—'}}{% if r.object_name %}<br><small>{{r.object_name}}</small>{% endif %}</td><td><code>{{r.method}} {{r.path}}</code></td><td>{{r.result}}</td><td>{{r.details or '—'}}</td></tr>{% else %}<tr><td colspan="7" class="empty">No audit events found.</td></tr>{% endfor %}</tbody></table></div>
+<div class="pagination">{% if page>1 %}<a class="btn secondary" href="?q={{q|urlencode}}&action={{action|urlencode}}&username={{username|urlencode}}&page={{page-1}}">Previous</a>{% endif %}<span>Page {{page}} / {{pages}}</span>{% if page<pages %}<a class="btn secondary" href="?q={{q|urlencode}}&action={{action|urlencode}}&username={{username|urlencode}}&page={{page+1}}">Next</a>{% endif %}</div>
+{% endblock %}
