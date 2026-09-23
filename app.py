@@ -3,6 +3,7 @@ from functools import wraps
 import os
 import sqlite3
 import zipfile
+import json
 import shutil
 import tempfile
 import urllib.request
@@ -69,6 +70,10 @@ def db():
       platform TEXT NOT NULL DEFAULT 'Windows',package_url TEXT,install_command TEXT,
       release_notes TEXT,created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS server_settings(
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    );
     """)
     # Lightweight schema migration for databases created by earlier mController builds.
     existing={row["name"] for row in c.execute("PRAGMA table_info(computers)").fetchall()}
@@ -133,6 +138,90 @@ def enforce_auth():
 
 def account_count():
     c=db(); n=c.execute("SELECT COUNT(*) n FROM accounts").fetchone()["n"]; c.close(); return n
+
+def get_setting(key, default=""):
+    c=db()
+    row=c.execute("SELECT value FROM server_settings WHERE key=?",(key,)).fetchone()
+    c.close()
+    return row["value"] if row else default
+
+def set_setting(key, value):
+    c=db()
+    c.execute("INSERT INTO server_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(key,str(value)))
+    c.commit()
+    c.close()
+
+def public_server_settings():
+    return {
+        "guacamole_url": get_setting("guacamole_url", os.environ.get("GUACAMOLE_URL","http://localhost:8080/guacamole/")),
+        "archive_root": get_setting("archive_root", os.environ.get("MCONTROLLER_ARCHIVE_ROOT","archives")),
+        "http_port": get_setting("http_port", os.environ.get("PORT","5000")),
+        "restart_command": get_setting("restart_command", os.environ.get("MCONTROLLER_RESTART_COMMAND","")),
+    }
+
+def export_payload(kind):
+    c=db()
+    if kind=="computers":
+        data={"type":"mcontroller-computers","version":1,"items":[dict(r) for r in c.execute("SELECT name,address,protocol,port,os,status,last_seen FROM computers ORDER BY name")]}
+    elif kind=="users":
+        data={"type":"mcontroller-users","version":1,"items":[dict(r) for r in c.execute("SELECT username,display_name FROM users ORDER BY username")]}
+    elif kind=="groups":
+        groups=[]
+        for g in c.execute("SELECT name,description FROM computer_groups ORDER BY name").fetchall():
+            members=[]
+            for r in c.execute("""SELECT c.name computer,u.username
+                                  FROM computer_group_mappings gm
+                                  JOIN mappings m ON m.id=gm.mapping_id
+                                  JOIN computers c ON c.id=m.computer_id
+                                  JOIN users u ON u.id=m.user_id
+                                  WHERE gm.group_id=? ORDER BY c.name,u.username""",(g["id"],)).fetchall():
+                members.append(dict(r))
+            groups.append({"name":g["name"],"description":g["description"],"members":members})
+        data={"type":"mcontroller-groups","version":1,"items":groups}
+    else:
+        raise ValueError("Unknown export type")
+    c.close()
+    return data
+
+def import_payload(payload, kind):
+    if not isinstance(payload,dict) or payload.get("version")!=1:
+        raise ValueError("Unsupported import format.")
+    expected={"computers":"mcontroller-computers","users":"mcontroller-users","groups":"mcontroller-groups"}[kind]
+    if payload.get("type")!=expected or not isinstance(payload.get("items"),list):
+        raise ValueError("Import file does not match the selected object type.")
+    c=db()
+    try:
+        for item in payload["items"]:
+            if kind=="computers":
+                c.execute("""INSERT INTO computers(name,address,protocol,port,os,status,last_seen)
+                            VALUES(?,?,?,?,?,?,?)
+                            ON CONFLICT(name) DO UPDATE SET address=excluded.address,protocol=excluded.protocol,
+                            port=excluded.port,os=excluded.os,status=excluded.status,last_seen=excluded.last_seen""",
+                          (item["name"],item["address"],item.get("protocol","rdp"),int(item.get("port",3389)),
+                           item.get("os","Windows"),item.get("status","unknown"),item.get("last_seen")))
+            elif kind=="users":
+                c.execute("""INSERT INTO users(username,display_name) VALUES(?,?)
+                            ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name""",
+                          (item["username"],item.get("display_name","")))
+            else:
+                c.execute("""INSERT INTO computer_groups(name,description) VALUES(?,?)
+                            ON CONFLICT(name) DO UPDATE SET description=excluded.description""",
+                          (item["name"],item.get("description","")))
+                gid=c.execute("SELECT id FROM computer_groups WHERE name=?",(item["name"],)).fetchone()["id"]
+                for member in item.get("members",[]):
+                    comp=c.execute("SELECT id FROM computers WHERE name=?",(member.get("computer"),)).fetchone()
+                    user=c.execute("SELECT id FROM users WHERE username=?",(member.get("username"),)).fetchone()
+                    if not comp or not user:
+                        continue
+                    c.execute("INSERT OR IGNORE INTO mappings(computer_id,user_id) VALUES(?,?)",(comp["id"],user["id"]))
+                    mapping=c.execute("SELECT id FROM mappings WHERE computer_id=? AND user_id=?",(comp["id"],user["id"])).fetchone()
+                    c.execute("INSERT OR IGNORE INTO computer_group_mappings(group_id,mapping_id) VALUES(?,?)",(gid,mapping["id"]))
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
 
 def ensure_env_admin():
     if account_count() or not os.environ.get("MCONTROLLER_ADMIN_PASSWORD"):
@@ -462,6 +551,46 @@ def admin_user_toggle(account_id):
     c=db(); c.execute("UPDATE accounts SET active=CASE active WHEN 1 THEN 0 ELSE 1 END WHERE id=?",(account_id,)); c.commit(); c.close()
     return redirect(url_for("admin_users"))
 
+@app.route("/settings",methods=["GET","POST"])
+@permission_required("manage_updates")
+def settings():
+    if request.method=="POST":
+        set_setting("guacamole_url",request.form.get("guacamole_url","").strip())
+        set_setting("archive_root",request.form.get("archive_root","").strip() or "archives")
+        set_setting("http_port",request.form.get("http_port","5000").strip() or "5000")
+        set_setting("restart_command",request.form.get("restart_command","").strip())
+        flash("Server settings saved. HTTP port changes take effect after restart.")
+        return redirect(url_for("settings"))
+    return render_template("settings.html",settings=public_server_settings())
+
+@app.route("/settings/export")
+@permission_required("manage_updates")
+def settings_export():
+    payload={"type":"mcontroller-server-settings","version":1,"settings":public_server_settings()}
+    response=jsonify(payload)
+    response.headers["Content-Disposition"]="attachment; filename=mcontroller-server-settings.json"
+    return response
+
+@app.route("/settings/import",methods=["POST"])
+@permission_required("manage_updates")
+def settings_import():
+    uploaded=request.files.get("file")
+    if not uploaded:
+        flash("Select a settings JSON file.")
+        return redirect(url_for("settings"))
+    try:
+        payload=json.loads(uploaded.read().decode("utf-8"))
+        if payload.get("type")!="mcontroller-server-settings" or payload.get("version")!=1:
+            raise ValueError("Unsupported server settings file.")
+        values=payload.get("settings",{})
+        for key in ("guacamole_url","archive_root","http_port","restart_command"):
+            if key in values:
+                set_setting(key,values[key])
+        flash("Server settings imported. HTTP port changes take effect after restart.")
+    except Exception as exc:
+        flash(f"Settings import failed: {exc}")
+    return redirect(url_for("settings"))
+
 @app.route("/updates",methods=["GET","POST"])
 @permission_required("manage_updates")
 def updates():
@@ -582,7 +711,7 @@ def guacamole(mapping_id):
     c=db(); r=c.execute("""SELECT c.*,u.username FROM mappings m JOIN computers c ON c.id=m.computer_id
                            JOIN users u ON u.id=m.user_id WHERE m.id=?""",(mapping_id,)).fetchone(); c.close()
     if not r: return "Mapping not found",404
-    base=os.environ.get("GUACAMOLE_URL","http://localhost:8080/guacamole/")
+    base=get_setting("guacamole_url", os.environ.get("GUACAMOLE_URL","http://localhost:8080/guacamole/"))
     return render_template("guacamole.html",r=r,base=base)
 
 @app.route("/archives",methods=["GET","POST"])
@@ -607,6 +736,33 @@ def archive_file(filename):
     target=ARCHIVE_ROOT/safe
     if not target.is_file(): abort(404)
     return send_from_directory(ARCHIVE_ROOT,safe,as_attachment=False)
+
+@app.route("/data/<kind>/export")
+@permission_required("manage_updates")
+def data_export(kind):
+    if kind not in {"computers","groups","users"}:
+        abort(404)
+    payload=export_payload(kind)
+    response=jsonify(payload)
+    response.headers["Content-Disposition"]=f"attachment; filename=mcontroller-{kind}.json"
+    return response
+
+@app.route("/data/<kind>/import",methods=["POST"])
+@permission_required("manage_updates")
+def data_import(kind):
+    if kind not in {"computers","groups","users"}:
+        abort(404)
+    uploaded=request.files.get("file")
+    if not uploaded:
+        flash(f"Select a {kind} JSON file.")
+        return redirect(url_for("settings"))
+    try:
+        payload=json.loads(uploaded.read().decode("utf-8"))
+        import_payload(payload,kind)
+        flash(f"{kind.title()} imported successfully.")
+    except Exception as exc:
+        flash(f"{kind.title()} import failed: {exc}")
+    return redirect(url_for("settings"))
 
 @app.route("/api/archives")
 @permission_required("view")
