@@ -9,10 +9,14 @@ class MControllerSecurityTests(unittest.TestCase):
         self.db = Path(self.tmp.name) / "test.db"
         os.environ["MCONTROLLER_DB"] = str(self.db)
         os.environ["MCONTROLLER_SECRET_KEY"] = "test-secret-key"
+        os.environ["MCONTROLLER_TESTING"] = "1"
         import app
+        self.app_module = app
         self.app = app.app
         self.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
         self.client = self.app.test_client()
+        app.DB = str(self.db)
+        app.ARCHIVE_ROOT = Path(self.tmp.name) / "archives"
         app.db().close()
 
     def tearDown(self):
