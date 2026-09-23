@@ -593,6 +593,107 @@ def health_history(computer_id):
     c.close()
     return render_template("health_history.html",computer=computer,history=history)
 
+
+def _discovery_init():
+    c=conn()
+    c.execute("""CREATE TABLE IF NOT EXISTS discovery_jobs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        target TEXT NOT NULL,
+        ports TEXT NOT NULL DEFAULT '22,3389,5900',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_run TEXT,
+        created_at TEXT NOT NULL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS discovery_results(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+        address TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        protocol TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        UNIQUE(job_id,address,port)
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_discovery_results_job ON discovery_results(job_id,last_seen)")
+    c.commit(); c.close()
+
+def _run_discovery(job):
+    target=ipaddress.ip_network(job["target"],strict=False)
+    if target.version!=4 or not target.is_private or target.prefixlen<16 or len(list(target.hosts()))>1024:
+        raise ValueError("Discovery requires a private IPv4 /16-/32 range with at most 1024 hosts.")
+    ports=[int(x.strip()) for x in job["ports"].split(",") if x.strip().isdigit() and 1<=int(x.strip())<=65535]
+    now=datetime.now().isoformat(timespec="seconds")
+    c=conn(); found=[]
+    for ip in target.hosts():
+        opened=probe_host(str(ip),ports)
+        for port in opened:
+            protocol=protocol_for_port(port)
+            c.execute("""INSERT INTO discovery_results(job_id,address,port,protocol,first_seen,last_seen,status)
+                         VALUES(?,?,?,?,?,?, 'pending')
+                         ON CONFLICT(job_id,address,port) DO UPDATE SET last_seen=excluded.last_seen,status='pending',protocol=excluded.protocol""",
+                      (job["id"],str(ip),port,protocol,now,now))
+            found.append((str(ip),port,protocol))
+    c.execute("UPDATE discovery_jobs SET last_run=? WHERE id=?",(now,job["id"]))
+    c.commit(); c.close()
+    return found
+
+@enhancements.route("/discovery",methods=["GET","POST"])
+@require("scan")
+def discovery():
+    _discovery_init(); c=conn()
+    if request.method=="POST":
+        name=request.form.get("name","").strip(); target=request.form.get("target","").strip()
+        ports=request.form.get("ports","22,3389,5900").strip()
+        if name and target:
+            try:
+                ipaddress.ip_network(target,strict=False)
+                c.execute("INSERT INTO discovery_jobs(name,target,ports,enabled,created_at) VALUES(?,?,?,?,?)",
+                          (name,target,ports,1,datetime.now().isoformat(timespec="seconds"))); c.commit()
+                flash("Discovery job created.")
+            except (ValueError,sqlite3.IntegrityError) as exc: flash("Unable to create job: "+str(exc))
+        return redirect(url_for("enhancements.discovery"))
+    jobs=c.execute("SELECT * FROM discovery_jobs ORDER BY name").fetchall()
+    results=c.execute("""SELECT r.*,j.name job_name FROM discovery_results r JOIN discovery_jobs j ON j.id=r.job_id
+                         ORDER BY r.last_seen DESC LIMIT 250""").fetchall()
+    c.close()
+    return render_template("discovery.html",jobs=jobs,results=results)
+
+@enhancements.route("/discovery/<int:job_id>/run",methods=["POST"])
+@require("scan")
+def discovery_run(job_id):
+    _discovery_init(); c=conn(); job=c.execute("SELECT * FROM discovery_jobs WHERE id=?",(job_id,)).fetchone(); c.close()
+    if not job: abort(404)
+    try:
+        found=_run_discovery(job)
+        write_audit("discovery_run","discovery_job",object_id=str(job_id),object_name=job["name"],details={"found":len(found)})
+        flash(f"Discovery completed: {len(found)} endpoint(s) detected.")
+    except Exception as exc: flash("Discovery failed: "+str(exc))
+    return redirect(url_for("enhancements.discovery"))
+
+@enhancements.route("/discovery/result/<int:result_id>/add",methods=["POST"])
+@require("manage_computers")
+def discovery_add(result_id):
+    _discovery_init(); c=conn()
+    r=c.execute("SELECT * FROM discovery_results WHERE id=?",(result_id,)).fetchone()
+    if not r: c.close(); abort(404)
+    name=request.form.get("name",r["address"]).strip() or r["address"]
+    try:
+        c.execute("INSERT INTO computers(name,address,protocol,port,os,status) VALUES(?,?,?,?,?,?)",
+                  (name,r["address"],r["protocol"],r["port"],"Unknown","discovered"))
+        c.commit(); c.execute("UPDATE discovery_results SET status='added' WHERE id=?",(result_id,)); c.commit()
+        flash(f"Added {name}.")
+    except sqlite3.IntegrityError: flash("A computer with that name already exists.")
+    c.close()
+    return redirect(url_for("enhancements.discovery"))
+
+@enhancements.route("/discovery/result/<int:result_id>/dismiss",methods=["POST"])
+@require("scan")
+def discovery_dismiss(result_id):
+    _discovery_init(); c=conn(); c.execute("UPDATE discovery_results SET status='dismissed' WHERE id=?",(result_id,)); c.commit(); c.close()
+    return redirect(url_for("enhancements.discovery"))
+
 def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
