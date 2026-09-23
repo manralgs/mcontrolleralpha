@@ -399,8 +399,10 @@ def mapping_test():
         try:
             with socket.create_connection((r["address"],int(r["port"])),timeout=0.8):
                 result={"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"reachable","detail":f"TCP {r['port']} open"}
+                _record_connection(r["id"],"success",result["detail"])
         except OSError as exc:
             result={"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"unreachable","detail":str(exc)}
+            _record_connection(r["id"],"failure",result["detail"])
         results.append(result)
     c.close()
     return render_template("mapping_test.html",results=results)
@@ -420,8 +422,10 @@ def mapping_test_all():
         try:
             with socket.create_connection((r["address"],int(r["port"])),timeout=0.8):
                 results.append({"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"reachable","detail":f"TCP {r['port']} open"})
+                _record_connection(r["id"],"success",results[-1]["detail"])
         except OSError as exc:
             results.append({"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"unreachable","detail":str(exc)})
+            _record_connection(r["id"],"failure",results[-1]["detail"])
     c.close()
     write_audit("mapping_test_all","mapping",details={"count":len(results)})
     return render_template("mapping_test.html",results=results)
