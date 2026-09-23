@@ -86,7 +86,6 @@ def _targets(c, target_type, target_ids):
         ).fetchall()
     return []
 
-
 def _ssh_identity():
     key = os.environ.get("MCONTROLLER_SSH_KEY", "").strip()
     if not key:
@@ -127,13 +126,9 @@ def _deploy_ssh(update, target, username):
     if parsed.scheme.lower() != "https" or not parsed.netloc:
         raise RuntimeError("Deployment package URL must use HTTPS.")
     filename = os.path.basename(parsed.path) or "package"
-    if filename in {".", ".."} or "/" in filename or "\\" in filename:
+    if filename in {".", ".."} or "/" in filename or "\" in filename:
         raise RuntimeError("Invalid deployment package filename.")
 
-    key = _ssh_identity()
-    token = secrets.token_hex(12)
-    remote_dir = f"/tmp/mcontroller-deploy-{token}"
-    package = remote_dir + "/" + filename
     expected_sha256 = ""
     try:
         expected_sha256 = str(update["sha256"] or "").strip().lower() if "sha256" in update.keys() else ""
@@ -141,6 +136,11 @@ def _deploy_ssh(update, target, username):
         expected_sha256 = ""
     if expected_sha256 and (len(expected_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in expected_sha256)):
         raise RuntimeError("Software release SHA-256 must be a 64-character hexadecimal value.")
+
+    key = _ssh_identity()
+    token = secrets.token_hex(12)
+    remote_dir = f"/tmp/mcontroller-deploy-{token}"
+    package = remote_dir + "/" + filename
 
     def remote(command, timeout):
         return _ssh_command(target["address"], target["port"], username, command, key, timeout=timeout)
@@ -285,13 +285,11 @@ def preflight(job_id):
                   (status, now, now, detail, target["id"]))
     status = "ready" if ready and not failed else ("failed" if failed and not ready else "partial")
     c.execute("UPDATE deployment_jobs SET status=?,started_at=?,completed_at=?,detail=? WHERE id=?",
-              (status, now, now, json.dumps({"ready":ready,"failed":failed}),
-               job_id))
+              (status, now, now, json.dumps({"ready":ready,"failed":failed}), job_id))
     c.commit()
     c.close()
     flash(f"Preflight complete: {ready} reachable, {failed} failed.")
     return redirect(url_for("deployment.job_detail", job_id=job_id))
-
 
 @deployment.route("/deployment/job/<int:job_id>/dispatch", methods=["POST"])
 @_require("deploy")
