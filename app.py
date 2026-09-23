@@ -372,6 +372,91 @@ def updates():
     rows=c.execute("SELECT * FROM software_updates ORDER BY id DESC").fetchall(); c.close()
     return render_template("updates.html",rows=rows)
 
+
+# ---- CRUD operations for managed objects ----
+@app.route("/computers/<int:item_id>/update",methods=["POST"])
+@permission_required("manage_computers")
+def computer_update(item_id):
+    c=db()
+    try: c.execute("UPDATE computers SET name=?,address=?,os=?,protocol=?,port=? WHERE id=?",(request.form["name"],request.form["address"],request.form.get("os","Unknown"),request.form.get("protocol","ssh"),int(request.form.get("port",22)),item_id)); c.commit()
+    except (sqlite3.IntegrityError,ValueError): pass
+    c.close(); return redirect(url_for("computers"))
+
+@app.route("/computers/<int:item_id>/delete",methods=["POST"])
+@permission_required("manage_computers")
+def computer_delete(item_id):
+    c=db(); c.execute("DELETE FROM computers WHERE id=?",(item_id,)); c.commit(); c.close(); return redirect(url_for("computers"))
+
+@app.route("/users/<int:item_id>/update",methods=["POST"])
+@permission_required("manage_users")
+def user_update(item_id):
+    c=db()
+    try: c.execute("UPDATE users SET username=?,display_name=? WHERE id=?",(request.form["username"],request.form.get("display_name",""),item_id)); c.commit()
+    except sqlite3.IntegrityError: pass
+    c.close(); return redirect(url_for("users"))
+
+@app.route("/users/<int:item_id>/delete",methods=["POST"])
+@permission_required("manage_users")
+def user_delete(item_id):
+    c=db(); c.execute("DELETE FROM users WHERE id=?",(item_id,)); c.commit(); c.close(); return redirect(url_for("users"))
+
+@app.route("/mappings/<int:item_id>/update",methods=["POST"])
+@permission_required("manage_computers")
+def mapping_update(item_id):
+    c=db()
+    try: c.execute("UPDATE mappings SET computer_id=?,user_id=? WHERE id=?",(request.form["computer_id"],request.form["user_id"],item_id)); c.commit()
+    except sqlite3.IntegrityError: pass
+    c.close(); return redirect(url_for("mappings"))
+
+@app.route("/mappings/<int:item_id>/delete",methods=["POST"])
+@permission_required("manage_computers")
+def mapping_delete(item_id):
+    c=db(); c.execute("DELETE FROM mappings WHERE id=?",(item_id,)); c.commit(); c.close(); return redirect(url_for("mappings"))
+
+@app.route("/groups/<int:item_id>/update",methods=["POST"])
+@permission_required("manage_groups")
+def group_update(item_id):
+    c=db()
+    try: c.execute("UPDATE computer_groups SET name=?,description=? WHERE id=?",(request.form["name"],request.form.get("description",""),item_id)); c.commit()
+    except sqlite3.IntegrityError: pass
+    c.close(); return redirect(url_for("groups"))
+
+@app.route("/groups/<int:item_id>/delete",methods=["POST"])
+@permission_required("manage_groups")
+def group_delete(item_id):
+    c=db(); c.execute("DELETE FROM computer_groups WHERE id=?",(item_id,)); c.commit(); c.close(); return redirect(url_for("groups"))
+
+@app.route("/admin/users/<int:account_id>/update",methods=["POST"])
+@permission_required("manage_users")
+def admin_user_update(account_id):
+    role=request.form.get("role"); password=request.form.get("password","")
+    if role in ROLES:
+        c=db()
+        if password: c.execute("UPDATE accounts SET username=?,role=?,password_hash=? WHERE id=?",(request.form["username"],role,hash_password(password),account_id))
+        else: c.execute("UPDATE accounts SET username=?,role=? WHERE id=?",(request.form["username"],role,account_id))
+        c.commit(); c.close()
+    return redirect(url_for("admin_users"))
+
+@app.route("/updates/<int:item_id>/update",methods=["POST"])
+@permission_required("manage_updates")
+def update_release(item_id):
+    c=db(); c.execute("UPDATE software_updates SET name=?,version=?,platform=?,package_url=?,install_command=?,release_notes=? WHERE id=?",(request.form["name"],request.form["version"],request.form.get("platform","Windows"),request.form.get("package_url",""),request.form.get("install_command",""),request.form.get("release_notes",""),item_id)); c.commit(); c.close(); return redirect(url_for("updates"))
+
+@app.route("/updates/<int:item_id>/delete",methods=["POST"])
+@permission_required("manage_updates")
+def delete_release(item_id):
+    c=db(); c.execute("DELETE FROM software_updates WHERE id=?",(item_id,)); c.commit(); c.close(); return redirect(url_for("updates"))
+
+@app.route("/archives/<int:item_id>/delete",methods=["POST"])
+@permission_required("archive")
+def archive_delete(item_id):
+    c=db(); row=c.execute("SELECT zip_name FROM archives WHERE id=?",(item_id,)).fetchone()
+    if row:
+        target=ARCHIVE_ROOT/Path(row["zip_name"]).name
+        if target.is_file(): target.unlink()
+        c.execute("DELETE FROM archives WHERE id=?",(item_id,)); c.commit()
+    c.close(); return redirect(url_for("archives"))
+
 @app.route("/guacamole/<int:mapping_id>")
 @permission_required("remote")
 def guacamole(mapping_id):
