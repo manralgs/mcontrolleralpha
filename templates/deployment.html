@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}Deployment Center · mController{% endblock %}{% block heading %}Deployment Center{% endblock %}{% block content %}
 <div class="hero compact"><div><span class="eyebrow">SOFTWARE DEPLOYMENT</span><h2>Deployment orchestration</h2><p>Create a deployment job, select computers or groups, then run a TCP preflight before dispatch.</p></div></div>
-<div class="card"><h3>Create deployment job</h3><form method="post" action="/deployment/job" class="form-grid">
+<div class="card"><h3>Create deployment job</h3><form method="post" action="/deployment/job" class="form-grid"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
 <label>Job name<input name="name" required placeholder="Chrome 140 rollout"></label>
 <label>Software release<select name="software_update_id" required>{% for u in updates %}<option value="{{u.id}}">{{u.name}} {{u.version}} · {{u.platform}}</option>{% else %}<option value="">No releases available</option>{% endfor %}</select></label>
 <label>Target type<select name="target_type" onchange="document.querySelectorAll('.target-list').forEach(x=>x.hidden=x.dataset.type!==this.value)"><option value="computer">Computers</option><option value="group">Groups</option></select></label>
