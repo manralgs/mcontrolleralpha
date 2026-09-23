@@ -275,6 +275,18 @@ def _validate_update_member(name):
     if any(part in UPDATE_EXCLUDED_NAMES for part in p.parts):
         raise ValueError(f"Update package contains excluded runtime path: {name}")
 
+UPDATE_MAX_PACKAGE_BYTES=250*1024*1024
+
+def _update_sha256(path):
+    digest=hashlib.sha256()
+    with open(path,"rb") as f:
+        for chunk in iter(lambda:f.read(1024*1024),b""): digest.update(chunk)
+    return digest.hexdigest()
+
+def _validate_update_version(current,target):
+    def parts(v): return tuple(int(x) if x.isdigit() else 0 for x in v.lstrip("v").split("."))
+    return parts(target)>parts(current)
+
 def _download_update_package(package_url):
     if not package_url:
         raise ValueError("Package URL is required.")
