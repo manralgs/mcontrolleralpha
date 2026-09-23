@@ -525,6 +525,74 @@ def backup_restore_commit(name):
         flash("Restore failed: "+str(exc))
     return redirect(url_for("enhancements.backup_center"))
 
+
+def _health_init():
+    c=conn()
+    c.execute("""CREATE TABLE IF NOT EXISTS computer_health(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        computer_id INTEGER NOT NULL REFERENCES computers(id) ON DELETE CASCADE,
+        checked_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        latency_ms REAL,
+        detail TEXT
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_health_computer_checked ON computer_health(computer_id,checked_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_health_checked ON computer_health(checked_at)")
+    c.commit(); c.close()
+
+def _check_computer_health(row, timeout=0.8):
+    started=time.monotonic()
+    try:
+        with socket.create_connection((row["address"],int(row["port"])),timeout=timeout):
+            latency=round((time.monotonic()-started)*1000,1)
+            return "online",latency,f"TCP {row['port']} reachable"
+    except OSError as exc:
+        return "offline",None,str(exc)
+
+@enhancements.route("/health")
+@require("view")
+def health_center():
+    _health_init()
+    c=conn()
+    rows=c.execute("""SELECT c.*,h.checked_at,h.status health_status,h.latency_ms,h.detail
+                      FROM computers c LEFT JOIN computer_health h ON h.id=(
+                        SELECT h2.id FROM computer_health h2 WHERE h2.computer_id=c.id ORDER BY h2.id DESC LIMIT 1)
+                      ORDER BY c.name""").fetchall()
+    c.close()
+    return render_template("health.html",rows=rows)
+
+@enhancements.route("/health/check",methods=["POST"])
+@require("scan")
+def health_check():
+    _health_init()
+    c=conn()
+    rows=c.execute("SELECT * FROM computers ORDER BY name").fetchall()
+    results=[]
+    for row in rows:
+        status,latency,detail=_check_computer_health(row)
+        now=datetime.now().isoformat(timespec="seconds")
+        c.execute("INSERT INTO computer_health(computer_id,checked_at,status,latency_ms,detail) VALUES(?,?,?,?,?)",
+                  (row["id"],now,status,latency,detail))
+        c.execute("UPDATE computers SET status=?,last_seen=? WHERE id=?",
+                  (status,now if status=="online" else row["last_seen"],row["id"]))
+        results.append({"name":row["name"],"status":status,"latency_ms":latency})
+    c.commit(); c.close()
+    write_audit("health_check","computer",details={"count":len(results),"online":sum(x["status"]=="online" for x in results)})
+    flash(f"Health check completed: {sum(x['status']=='online' for x in results)} online, {sum(x['status']=='offline' for x in results)} offline.")
+    return redirect(url_for("enhancements.health_center"))
+
+@enhancements.route("/health/<int:computer_id>")
+@require("view")
+def health_history(computer_id):
+    _health_init()
+    c=conn()
+    computer=c.execute("SELECT * FROM computers WHERE id=?",(computer_id,)).fetchone()
+    if not computer: c.close(); abort(404)
+    history=c.execute("""SELECT checked_at,status,latency_ms,detail FROM computer_health
+                         WHERE computer_id=? ORDER BY id DESC LIMIT 100""",(computer_id,)).fetchall()
+    c.close()
+    return render_template("health_history.html",computer=computer,history=history)
+
 def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
