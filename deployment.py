@@ -126,7 +126,7 @@ def _deploy_ssh(update, target, username):
     if parsed.scheme.lower() != "https" or not parsed.netloc:
         raise RuntimeError("Deployment package URL must use HTTPS.")
     filename = os.path.basename(parsed.path) or "package"
-    if filename in {".", ".."} or "/" in filename or "\" in filename:
+    if filename in {".", ".."} or "/" in filename or "\\" in filename:
         raise RuntimeError("Invalid deployment package filename.")
 
     expected_sha256 = ""
