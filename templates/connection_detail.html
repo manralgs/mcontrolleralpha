@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Connection Detail · mController{% endblock %}{% block heading %}Connection Detail{% endblock %}{% block content %}
+<div class="hero compact"><div><span class="eyebrow">REMOTE ACCESS</span><h2>{{row.computer}}</h2><p>{{row.address}}:{{row.port}} · {{row.protocol|upper}} · {{row.username}}</p></div><a class="btn secondary" href="/connections">Back</a></div>
+<div class="card"><dl><dt>Started</dt><dd>{{row.started_at}}</dd><dt>Ended</dt><dd>{{row.ended_at or '—'}}</dd><dt>Result</dt><dd>{{row.result|upper}}</dd><dt>Detail</dt><dd>{{row.detail}}</dd></dl></div>
+{% endblock %}
