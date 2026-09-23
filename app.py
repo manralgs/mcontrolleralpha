@@ -17,6 +17,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
+from enhancements import register_enhancements
 
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
 ARCHIVE_ROOT = Path(os.environ.get("MCONTROLLER_ARCHIVE_ROOT", "archives")).resolve()
@@ -810,6 +811,8 @@ def api_groups():
                        FROM computer_group_mappings gm JOIN mappings m ON m.id=gm.mapping_id JOIN computers c ON c.id=m.computer_id
                        JOIN users u ON u.id=m.user_id WHERE gm.group_id=?""",(g["id"],)).fetchall()]})
     c.close(); return jsonify(rows)
+
+register_enhancements(app)
 
 if __name__=="__main__":
     ensure_env_admin()
