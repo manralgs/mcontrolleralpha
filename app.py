@@ -334,6 +334,36 @@ def _stage_update(package_path):
         shutil.rmtree(stage,ignore_errors=True)
         raise
 
+def _create_update_backup(project):
+    backup=Path(tempfile.mkdtemp(prefix="mcontroller-update-backup-"))
+    for source in project.rglob("*"):
+        relative=source.relative_to(project)
+        if any(part in UPDATE_EXCLUDED_NAMES for part in relative.parts): continue
+        target=backup/relative
+        if source.is_dir(): target.mkdir(parents=True,exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(source,target)
+    return backup
+
+def _restore_update_backup(project,backup):
+    for source in backup.rglob("*"):
+        relative=source.relative_to(backup)
+        if any(part in UPDATE_EXCLUDED_NAMES for part in relative.parts): continue
+        target=project/relative
+        if source.is_file():
+            target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(source,target)
+
+def _update_health_check(project):
+    check=project/"app.py"
+    if not check.is_file(): return False
+    try:
+        compile(check.read_text(encoding="utf-8"),str(check),"exec")
+        return True
+    except Exception:
+        return False
+
 def _apply_update(root):
     project=Path(__file__).resolve().parent
     for source in root.rglob("*"):
@@ -359,18 +389,27 @@ def _restart_server():
 def perform_update(package_url):
     package=None
     stage=None
+    backup=None
+    project=Path(__file__).resolve().parent
     try:
         package=_download_update_package(package_url)
         _validate_update_package_file(package)
         stage,root=_stage_update(package)
+        if not _update_health_check(root):
+            raise RuntimeError("Update package failed Python syntax validation.")
+        backup=_create_update_backup(project)
         _apply_update(root)
+        if not _update_health_check(project):
+            _restore_update_backup(project,backup)
+            raise RuntimeError("Updated application failed health validation; rollback completed.")
         threading.Thread(target=_restart_server,daemon=True).start()
-        return True,"Update applied. The server is restarting now."
+        return True,"Update staged, validated, and applied. The server is restarting now."
+    except Exception:
+        raise
     finally:
-        if package:
-            package.unlink(missing_ok=True)
-        if stage:
-            shutil.rmtree(stage,ignore_errors=True)
+        if package: package.unlink(missing_ok=True)
+        if stage: shutil.rmtree(stage,ignore_errors=True)
+        if backup: shutil.rmtree(backup,ignore_errors=True)
 
 def safe_zip_name(name):
     return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("..", "_")
