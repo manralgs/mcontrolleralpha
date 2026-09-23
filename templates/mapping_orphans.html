@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Mapping Health · mController{% endblock %}{% block heading %}Mapping Health{% endblock %}{% block content %}
+<div class="hero compact"><div><span class="eyebrow">INTEGRITY CHECK</span><h2>Orphaned inventory</h2><p>Records without an access mapping are shown below.</p></div><a class="btn secondary" href="/mapping-center">Mapping Center</a></div>
+<div class="grid two"><div class="card"><h3>Unmapped computers ({{computers|length}})</h3>{% for r in computers %}<div class="group-item"><span>{{r.name}}<small>{{r.address}}</small></span></div>{% else %}<p class="muted">No orphan computers.</p>{% endfor %}</div><div class="card"><h3>Unmapped users ({{users|length}})</h3>{% for r in users %}<div class="group-item"><span>{{r.username}}</span></div>{% else %}<p class="muted">No orphan users.</p>{% endfor %}</div></div>
+{% endblock %}
