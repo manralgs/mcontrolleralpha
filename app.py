@@ -488,7 +488,6 @@ LOGIN_LOCKOUT_SECONDS=int(os.environ.get("MCONTROLLER_LOGIN_LOCKOUT_SECONDS","90
 _login_attempts={}
 _login_lock=threading.Lock()
 
-@app.route("/login", methods=["GET","POST"])
 def _login_key():
     return request.remote_addr or "unknown"
 
@@ -514,6 +513,7 @@ def _record_login_failure():
 def _clear_login_failures():
     with _login_lock: _login_attempts.pop(_login_key(),None)
 
+@app.route("/login", methods=["GET","POST"])
 def login():
     if current_account(): return redirect(request.args.get("next") or url_for("index"))
     error=None
