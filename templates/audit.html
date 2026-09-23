@@ -2,7 +2,7 @@
 {% block title %}Audit Log · mController{% endblock %}
 {% block heading %}Audit Log{% endblock %}
 {% block content %}
-<div class="hero compact"><div><span class="eyebrow">ACCOUNTABILITY</span><h2>Administrative activity history</h2><p>{{total}} recorded event(s).</p></div><a class="btn secondary" href="/operations">Operations</a></div>
+<div class="hero compact"><div><span class="eyebrow">ACCOUNTABILITY</span><h2>Administrative activity history</h2><p>{{total}} recorded event(s).</p></div><div><a class="btn secondary" href="/operations">Operations</a> <form method="post" action="/audit/retention" style="display:inline" onsubmit="return confirm('Keep the newest 5000 audit events and remove older entries?')"><button class="btn danger" type="submit">Apply Retention</button></form></div></div>
 <div class="card"><form method="get" class="form-grid">
 <label>Search<input name="q" value="{{q}}" placeholder="Path, object or details"></label>
 <label>Action<select name="action"><option value="">All actions</option>{% for x in actions %}<option value="{{x}}" {% if x==action %}selected{% endif %}>{{x}}</option>{% endfor %}</select></label>
