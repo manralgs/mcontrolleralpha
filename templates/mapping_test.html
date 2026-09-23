@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Mapping Test · mController{% endblock %}{% block heading %}Connectivity Results{% endblock %}{% block content %}
+<div class="hero compact"><div><span class="eyebrow">CONNECTIVITY TEST</span><h2>TCP endpoint results</h2><p>{{results|length}} mapping(s) tested. Authentication was not attempted.</p></div><a class="btn secondary" href="/mapping-center">Back to Mapping Center</a></div>
+<div class="card table-wrap"><table><thead><tr><th>Computer</th><th>User</th><th>Protocol</th><th>Status</th><th>Details</th></tr></thead><tbody>{% for r in results %}<tr><td><b>{{r.computer}}</b></td><td>{{r.username}}</td><td>{{r.protocol|upper}}</td><td><span class="pill">{{r.status|upper}}</span></td><td>{{r.detail}}</td></tr>{% else %}<tr><td colspan="5" class="empty">No mappings selected.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
