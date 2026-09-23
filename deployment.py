@@ -5,7 +5,6 @@ import socket
 import subprocess
 import shlex
 import shutil
-import hashlib
 import secrets
 from datetime import datetime
 from functools import wraps
@@ -146,6 +145,7 @@ def _deploy_ssh(update, target, username):
     def remote(command, timeout):
         return _ssh_command(target["address"], target["port"], username, command, key, timeout=timeout)
 
+    cleanup_error = None
     try:
         prep = (
             "set -eu; umask 077; mkdir -p " + shlex.quote(remote_dir) +
@@ -176,9 +176,10 @@ def _deploy_ssh(update, target, username):
             cleanup = remote("rm -rf " + shlex.quote(remote_dir), 30)
             if cleanup.returncode != 0:
                 raise RuntimeError((cleanup.stderr or cleanup.stdout or "Remote cleanup failed").strip()[-1000:])
-        except Exception:
-            # Preserve the original deployment exception while still making cleanup best-effort.
-            pass
+        except Exception as exc:
+            cleanup_error = exc
+    if cleanup_error:
+        raise RuntimeError(f"Remote deployment cleanup failed: {cleanup_error}")
 
 def _preflight_target(row, timeout=1.0):
     try:
