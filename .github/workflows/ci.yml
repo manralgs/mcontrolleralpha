@@ -1,0 +1,49 @@
+name: mController CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Compile application
+        run: python -m py_compile app.py enhancements.py update_watchdog.py
+
+      - name: Run security regression tests
+        env:
+          MCONTROLLER_TESTING: "1"
+        run: python -m unittest discover -s tests -v
+
+      - name: Check repository for accidental runtime files
+        shell: bash
+        run: |
+          forbidden=0
+          for path in mcontroller.db .env runtime archives; do
+            if [ -e "$path" ]; then
+              echo "Forbidden runtime path present: $path"
+              forbidden=1
+            fi
+          done
+          test "$forbidden" -eq 0
