@@ -3,7 +3,7 @@ import json
 import sqlite3
 from datetime import datetime
 from functools import wraps
-from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort, Response
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort, Response, send_file
 
 enhancements = Blueprint("enhancements", __name__)
 
@@ -425,6 +425,105 @@ def mapping_test_all():
     c.close()
     write_audit("mapping_test_all","mapping",details={"count":len(results)})
     return render_template("mapping_test.html",results=results)
+
+
+def _backup_root():
+    root=Path(os.environ.get("MCONTROLLER_BACKUP_ROOT",str(Path("runtime")/"backups"))).expanduser().resolve()
+    root.mkdir(parents=True,exist_ok=True)
+    return root
+
+def _backup_payload():
+    c=conn()
+    data={}
+    for table in ("computers","users","mappings","computer_groups","computer_group_mappings","server_settings","software_updates"):
+        rows=c.execute(f"SELECT * FROM {table}").fetchall()
+        data[table]=[dict(row) for row in rows]
+    c.close()
+    return {"type":"mcontroller-backup","version":1,"created_at":datetime.now().isoformat(timespec="seconds"),"tables":data}
+
+@enhancements.route("/backup")
+@require("view")
+def backup_center():
+    root=_backup_root()
+    files=sorted(root.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)
+    return render_template("backup_center.html",files=[{"name":p.name,"size":p.stat().st_size,"created_at":datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")} for p in files])
+
+@enhancements.route("/backup/create",methods=["POST"])
+@require("manage_updates")
+def backup_create():
+    payload=_backup_payload()
+    name="mcontroller-backup-"+datetime.now().strftime("%Y%m%d_%H%M%S")+".json"
+    path=_backup_root()/name
+    path.write_text(json.dumps(payload,indent=2,default=str),encoding="utf-8")
+    write_audit("backup_create","backup",object_name=name,details={"size":path.stat().st_size})
+    flash("Backup created.")
+    return redirect(url_for("enhancements.backup_center"))
+
+@enhancements.route("/backup/download/<path:name>")
+@require("view")
+def backup_download(name):
+    root=_backup_root()
+    path=(root/name).resolve()
+    if path.parent!=root or path.suffix.lower()!=".json" or not path.is_file(): abort(404)
+    return send_file(path,as_attachment=True,download_name=path.name)
+
+@enhancements.route("/backup/restore/<path:name>")
+@require("manage_updates")
+def backup_restore_preview(name):
+    root=_backup_root(); path=(root/name).resolve()
+    if path.parent!=root or not path.is_file(): abort(404)
+    try:
+        payload=json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("type")!="mcontroller-backup" or payload.get("version")!=1: raise ValueError("Unsupported backup format.")
+        tables=payload.get("tables",{})
+        required={"computers","users","mappings","computer_groups","computer_group_mappings","server_settings","software_updates"}
+        missing=required-set(tables)
+        if missing: raise ValueError("Backup is missing: "+", ".join(sorted(missing)))
+        summary={k:len(v) for k,v in tables.items()}
+    except Exception as exc:
+        return render_template("backup_restore.html",name=name,error=str(exc),summary={})
+    return render_template("backup_restore.html",name=name,error=None,summary=summary)
+
+@enhancements.route("/backup/restore/<path:name>/commit",methods=["POST"])
+@require("manage_updates")
+def backup_restore_commit(name):
+    root=_backup_root(); path=(root/name).resolve()
+    if path.parent!=root or not path.is_file(): abort(404)
+    try:
+        payload=json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("type")!="mcontroller-backup" or payload.get("version")!=1: raise ValueError("Unsupported backup format.")
+        tables=payload["tables"]
+        pre=_backup_payload()
+        pre_name="pre-restore-"+datetime.now().strftime("%Y%m%d_%H%M%S")+".json"
+        (_backup_root()/pre_name).write_text(json.dumps(pre,indent=2,default=str),encoding="utf-8")
+        c=conn()
+        try:
+            c.execute("BEGIN")
+            for table in ("computer_group_mappings","mappings","computer_groups","server_settings","software_updates","computers","users"):
+                c.execute(f"DELETE FROM {table}")
+            for row in tables["computers"]:
+                c.execute("INSERT INTO computers VALUES (?,?,?,?,?,?,?,?)",tuple(row.values()))
+            for row in tables["users"]:
+                c.execute("INSERT INTO users VALUES (?,?,?)",tuple(row.values()))
+            for row in tables["mappings"]:
+                c.execute("INSERT INTO mappings VALUES (?,?,?)",tuple(row.values()))
+            for row in tables["computer_groups"]:
+                c.execute("INSERT INTO computer_groups VALUES (?,?,?)",tuple(row.values()))
+            for row in tables["computer_group_mappings"]:
+                c.execute("INSERT INTO computer_group_mappings VALUES (?,?)",tuple(row.values()))
+            for row in tables["server_settings"]:
+                c.execute("INSERT INTO server_settings VALUES (?,?)",tuple(row.values()))
+            for row in tables["software_updates"]:
+                c.execute("INSERT INTO software_updates VALUES (?,?,?,?,?,?,?)",tuple(row.values()))
+            c.commit()
+        except Exception:
+            c.rollback(); raise
+        finally: c.close()
+        write_audit("backup_restore","backup",object_name=name,details={"pre_restore_backup":pre_name,"tables":{k:len(v) for k,v in tables.items()}})
+        flash("Backup restored successfully. A pre-restore backup was created.")
+    except Exception as exc:
+        flash("Restore failed: "+str(exc))
+    return redirect(url_for("enhancements.backup_center"))
 
 def register_enhancements(app):
     ensure_tables()
