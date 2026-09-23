@@ -390,16 +390,51 @@ def setup():
     return render_template("setup.html",error=error)
 
 @app.route("/login", methods=["GET","POST"])
+LOGIN_MAX_ATTEMPTS=int(os.environ.get("MCONTROLLER_LOGIN_MAX_ATTEMPTS","5"))
+LOGIN_WINDOW_SECONDS=int(os.environ.get("MCONTROLLER_LOGIN_WINDOW_SECONDS","900"))
+LOGIN_LOCKOUT_SECONDS=int(os.environ.get("MCONTROLLER_LOGIN_LOCKOUT_SECONDS","900"))
+_login_attempts={}
+_login_lock=threading.Lock()
+
+def _login_key():
+    return request.remote_addr or "unknown"
+
+def _login_allowed():
+    now=time.time(); key=_login_key()
+    with _login_lock:
+        state=_login_attempts.get(key)
+        if not state: return True
+        if now-state["first"]>LOGIN_WINDOW_SECONDS:
+            _login_attempts.pop(key,None); return True
+        return state.get("locked_until",0)<=now
+
+def _record_login_failure():
+    now=time.time(); key=_login_key()
+    with _login_lock:
+        state=_login_attempts.get(key)
+        if not state or now-state["first"]>LOGIN_WINDOW_SECONDS:
+            state={"first":now,"count":0,"locked_until":0}; _login_attempts[key]=state
+        state["count"]+=1
+        if state["count"]>=LOGIN_MAX_ATTEMPTS:
+            state["locked_until"]=now+LOGIN_LOCKOUT_SECONDS
+
+def _clear_login_failures():
+    with _login_lock: _login_attempts.pop(_login_key(),None)
+
 def login():
     if current_account(): return redirect(request.args.get("next") or url_for("index"))
     error=None
+    if not _login_allowed():
+        return render_template("login.html",error="Too many failed attempts. Try again later.",next=request.args.get("next","")), 429
     if request.method=="POST":
         username=request.form.get("username","").strip()
         password=request.form.get("password","")
         c=db(); row=c.execute("SELECT * FROM accounts WHERE username=? AND active=1",(username,)).fetchone(); c.close()
         if row and verify_password(password,row["password_hash"]):
+            _clear_login_failures()
             session.clear(); session["account_id"]=row["id"]
             return redirect(safe_next_url(request.form.get("next") or request.args.get("next")))
+        _record_login_failure()
         error="Invalid username or password."
     return render_template("login.html",error=error,next=request.args.get("next",""))
 
