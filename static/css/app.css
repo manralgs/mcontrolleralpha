@@ -5,3 +5,5 @@
 @media(max-width:700px){.form-grid,.role-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.auth-wrap{margin:20px auto}.inline-form{flex-wrap:wrap}}
 
 .command-card{margin-top:16px;background:#f7f9fc;box-shadow:none}.command-card code{display:block;margin:10px 0;padding:10px;border-radius:8px;background:#172033;color:#fff;overflow:auto}.command-card small{display:block;color:var(--muted);line-height:1.5}
+
+.btn.danger{background:#fff0f0;color:#a12626;border:1px solid #f2cccc}.pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin:18px 0;color:var(--muted);font-weight:700}.nav-enhance{opacity:.95}
