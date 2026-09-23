@@ -18,6 +18,7 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
 import hmac
+import subprocess
 from enhancements import register_enhancements
 
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
@@ -386,6 +387,21 @@ def _restart_server():
     script=Path(__file__).resolve()
     os.execv(sys.executable,[sys.executable,str(script),*sys.argv[1:]])
 
+def _start_update_watchdog(backup):
+    project=Path(__file__).resolve().parent
+    watchdog=project/"update_watchdog.py"
+    if not watchdog.is_file():
+        raise RuntimeError("Post-restart update watchdog is missing.")
+    port=int(get_setting("http_port", os.environ.get("PORT","5000")))
+    env=os.environ.copy()
+    env["MCONTROLLER_UPDATE_BACKUP"]=str(backup)
+    env["MCONTROLLER_UPDATE_PROJECT"]=str(project)
+    env["MCONTROLLER_UPDATE_PORT"]=str(port)
+    env["MCONTROLLER_UPDATE_COMMAND"]=os.environ.get("MCONTROLLER_RESTART_COMMAND","").strip()
+    subprocess.Popen([sys.executable,str(watchdog)],env=env,
+                     stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
 def perform_update(package_url):
     package=None
     stage=None
@@ -402,8 +418,10 @@ def perform_update(package_url):
         if not _update_health_check(project):
             _restore_update_backup(project,backup)
             raise RuntimeError("Updated application failed health validation; rollback completed.")
+        _start_update_watchdog(backup)
         threading.Thread(target=_restart_server,daemon=True).start()
-        return True,"Update staged, validated, and applied. The server is restarting now."
+        backup=None
+        return True,"Update staged, validated, and applied. The server is restarting now; post-restart health verification is active."
     except Exception:
         raise
     finally:
@@ -516,6 +534,10 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status":"ok","service":"mcontroller"}), 200
 
 @app.route("/")
 @permission_required("view")
