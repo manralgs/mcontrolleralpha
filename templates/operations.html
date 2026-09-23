@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Operations · mController{% endblock %}
+{% block heading %}Operations{% endblock %}
+{% block content %}
+<div class="hero compact"><div><span class="eyebrow">INVENTORY OPERATIONS</span><h2>Search, filter and bulk manage computers</h2><p>{{total}} matching computer(s).</p></div><a class="btn secondary" href="/audit">Audit Log</a></div>
+<div class="card"><form method="get" class="form-grid">
+<label>Search<input name="q" value="{{q}}" placeholder="Name or IP address"></label>
+<label>Status<select name="status"><option value="">All statuses</option>{% for x in statuses %}<option value="{{x}}" {% if x==status %}selected{% endif %}>{{x}}</option>{% endfor %}</select></label>
+<label>Operating system<select name="os"><option value="">All OS</option>{% for x in oss %}<option value="{{x}}" {% if x==os_name %}selected{% endif %}>{{x}}</option>{% endfor %}</select></label>
+<label>Protocol<select name="protocol"><option value="">All protocols</option><option value="rdp" {% if protocol=="rdp" %}selected{% endif %}>RDP</option><option value="ssh" {% if protocol=="ssh" %}selected{% endif %}>SSH</option><option value="vnc" {% if protocol=="vnc" %}selected{% endif %}>VNC</option></select></label>
+<div><button class="btn primary">Apply filters</button> <a class="btn secondary" href="/operations">Reset</a></div>
+</form></div>
+<form method="post" action="/operations/computers/bulk-delete" onsubmit="return confirm('Delete all selected computers and their mappings?')">
+<div class="card table-wrap">
+<div class="card-head"><div><h3>Computer results</h3><p>Select records for bulk actions.</p></div><button class="btn danger" type="submit">Delete selected</button></div>
+<table><thead><tr><th><input type="checkbox" onclick="document.querySelectorAll('.row-check').forEach(x=>x.checked=this.checked)"></th><th>Name</th><th>Address</th><th>OS</th><th>Protocol</th><th>Status</th><th>Last seen</th></tr></thead>
+<tbody>{% for r in rows %}<tr><td><input class="row-check" type="checkbox" name="ids" value="{{r.id}}"></td><td><b>{{r.name}}</b></td><td>{{r.address}}</td><td>{{r.os}}</td><td>{{r.protocol|upper}}:{{r.port}}</td><td>{{r.status}}</td><td>{{r.last_seen or '—'}}</td></tr>{% else %}<tr><td colspan="7" class="empty">No computers match the filters.</td></tr>{% endfor %}</tbody></table>
+</div></form>
+<div class="pagination">{% if page>1 %}<a class="btn secondary" href="?q={{q|urlencode}}&status={{status|urlencode}}&os={{os_name|urlencode}}&protocol={{protocol|urlencode}}&page={{page-1}}">Previous</a>{% endif %}<span>Page {{page}} / {{pages}}</span>{% if page<pages %}<a class="btn secondary" href="?q={{q|urlencode}}&status={{status|urlencode}}&os={{os_name|urlencode}}&protocol={{protocol|urlencode}}&page={{page+1}}">Next</a>{% endif %}</div>
+{% endblock %}
