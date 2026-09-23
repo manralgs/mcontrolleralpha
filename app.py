@@ -554,11 +554,21 @@ def admin_user_toggle(account_id):
 @app.route("/settings",methods=["GET","POST"])
 @permission_required("manage_updates")
 def settings():
+    global ARCHIVE_ROOT
     if request.method=="POST":
+        archive_root=request.form.get("archive_root","").strip() or "archives"
+        try:
+            port=int(request.form.get("http_port","5000").strip() or "5000")
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            flash("HTTP port must be between 1 and 65535.")
+            return redirect(url_for("settings"))
         set_setting("guacamole_url",request.form.get("guacamole_url","").strip())
-        set_setting("archive_root",request.form.get("archive_root","").strip() or "archives")
-        set_setting("http_port",request.form.get("http_port","5000").strip() or "5000")
+        set_setting("archive_root",archive_root)
+        set_setting("http_port",str(port))
         set_setting("restart_command",request.form.get("restart_command","").strip())
+        ARCHIVE_ROOT=Path(archive_root).expanduser().resolve()
         flash("Server settings saved. HTTP port changes take effect after restart.")
         return redirect(url_for("settings"))
     return render_template("settings.html",settings=public_server_settings())
@@ -574,6 +584,7 @@ def settings_export():
 @app.route("/settings/import",methods=["POST"])
 @permission_required("manage_updates")
 def settings_import():
+    global ARCHIVE_ROOT
     uploaded=request.files.get("file")
     if not uploaded:
         flash("Select a settings JSON file.")
@@ -586,6 +597,8 @@ def settings_import():
         for key in ("guacamole_url","archive_root","http_port","restart_command"):
             if key in values:
                 set_setting(key,values[key])
+        archive_value=get_setting("archive_root","archives")
+        ARCHIVE_ROOT=Path(archive_value).expanduser().resolve()
         flash("Server settings imported. HTTP port changes take effect after restart.")
     except Exception as exc:
         flash(f"Settings import failed: {exc}")
