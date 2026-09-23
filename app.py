@@ -482,13 +482,13 @@ def setup():
             return redirect(url_for("login"))
     return render_template("setup.html",error=error)
 
-@app.route("/login", methods=["GET","POST"])
 LOGIN_MAX_ATTEMPTS=int(os.environ.get("MCONTROLLER_LOGIN_MAX_ATTEMPTS","5"))
 LOGIN_WINDOW_SECONDS=int(os.environ.get("MCONTROLLER_LOGIN_WINDOW_SECONDS","900"))
 LOGIN_LOCKOUT_SECONDS=int(os.environ.get("MCONTROLLER_LOGIN_LOCKOUT_SECONDS","900"))
 _login_attempts={}
 _login_lock=threading.Lock()
 
+@app.route("/login", methods=["GET","POST"])
 def _login_key():
     return request.remote_addr or "unknown"
 
