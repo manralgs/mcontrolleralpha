@@ -8,6 +8,7 @@ import shutil
 from datetime import datetime
 from functools import wraps
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort
+from urllib.parse import urlparse
 
 deployment = Blueprint("deployment", __name__)
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
