@@ -324,6 +324,108 @@ def import_commit(job_id):
         flash(f"Import failed and was rolled back: {exc}")
     return redirect(url_for("enhancements.import_center",kind=job["kind"]))
 
+
+def mapping_rows(c):
+    return c.execute("""SELECT m.id,m.computer_id,m.user_id,c.name computer,c.address,c.protocol,c.port,c.os,
+                               c.status,u.username,u.display_name
+                        FROM mappings m JOIN computers c ON c.id=m.computer_id
+                        JOIN users u ON u.id=m.user_id
+                        ORDER BY c.name,u.username""").fetchall()
+
+@enhancements.route("/mapping-center")
+@require("view")
+def mapping_center():
+    q=request.args.get("q","").strip()
+    page=max(int(request.args.get("page",1) or 1),1)
+    per_page=min(max(int(request.args.get("per_page",25) or 25),10),100)
+    c=conn()
+    where=[]; params=[]
+    if q:
+        where.append("(c.name LIKE ? OR c.address LIKE ? OR u.username LIKE ?)")
+        params += [f"%{q}%",f"%{q}%",f"%{q}%"]
+    clause=(" WHERE "+" AND ".join(where)) if where else ""
+    total=c.execute("SELECT COUNT(*) n FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id"+clause,params).fetchone()["n"]
+    rows=c.execute("""SELECT m.id,m.computer_id,m.user_id,c.name computer,c.address,c.protocol,c.port,c.os,c.status,u.username
+                      FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id
+                      """+clause+" ORDER BY c.name,u.username LIMIT ? OFFSET ?",params+[per_page,(page-1)*per_page]).fetchall()
+    c.close()
+    return render_template("mapping_center.html",rows=rows,q=q,page=page,pages=max((total+per_page-1)//per_page,1),total=total)
+
+@enhancements.route("/mapping-center/bulk-delete",methods=["POST"])
+@require("manage_computers")
+def mapping_bulk_delete():
+    ids=[int(x) for x in request.form.getlist("ids") if x.isdigit()]
+    if not ids:
+        flash("Select at least one mapping."); return redirect(url_for("enhancements.mapping_center"))
+    c=conn()
+    names=[f"{r['computer']} / {r['username']}" for r in c.execute(
+        "SELECT c.name computer,u.username FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id WHERE m.id IN (%s)"%(",".join("?"*len(ids))),ids).fetchall()]
+    c.execute("DELETE FROM mappings WHERE id IN (%s)"%(",".join("?"*len(ids))),ids); c.commit(); c.close()
+    write_audit("mapping_bulk_delete","mapping",details={"count":len(ids),"mappings":names})
+    flash(f"Deleted {len(ids)} mapping(s).")
+    return redirect(url_for("enhancements.mapping_center"))
+
+@enhancements.route("/mapping-center/export")
+@require("view")
+def mapping_export():
+    c=conn()
+    rows=mapping_rows(c)
+    payload={"type":"mcontroller-mappings","version":1,"items":[{"computer":r["computer"],"user":r["username"]} for r in rows]}
+    c.close()
+    response=app.response_class(json.dumps(payload,indent=2),mimetype="application/json")
+    response.headers["Content-Disposition"]="attachment; filename=mcontroller-mappings.json"
+    return response
+
+@enhancements.route("/mapping-center/orphans")
+@require("view")
+def mapping_orphans():
+    c=conn()
+    orphan_users=c.execute("""SELECT u.username FROM users u LEFT JOIN mappings m ON m.user_id=u.id
+                              WHERE m.id IS NULL ORDER BY u.username""").fetchall()
+    orphan_computers=c.execute("""SELECT c.name,c.address FROM computers c LEFT JOIN mappings m ON m.computer_id=c.id
+                                  WHERE m.id IS NULL ORDER BY c.name""").fetchall()
+    c.close()
+    return render_template("mapping_orphans.html",users=orphan_users,computers=orphan_computers)
+
+@enhancements.route("/mapping-center/test",methods=["POST"])
+@require("manage_computers")
+def mapping_test():
+    ids=[int(x) for x in request.form.getlist("ids") if x.isdigit()]
+    c=conn()
+    results=[]
+    for r in c.execute("""SELECT m.id,c.name,c.address,c.port,c.protocol,u.username
+                          FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id
+                          WHERE m.id IN (%s) ORDER BY c.name,u.username"""%(",".join("?"*len(ids))),ids).fetchall() if ids else []:
+        try:
+            with socket.create_connection((r["address"],int(r["port"])),timeout=0.8):
+                result={"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"reachable","detail":f"TCP {r['port']} open"}
+        except OSError as exc:
+            result={"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"unreachable","detail":str(exc)}
+        results.append(result)
+    c.close()
+    return render_template("mapping_test.html",results=results)
+
+@enhancements.route("/mapping-center/test-all",methods=["POST"])
+@require("manage_computers")
+def mapping_test_all():
+    c=conn()
+    ids=[r["id"] for r in c.execute("SELECT id FROM mappings ORDER BY id").fetchall()]
+    c.close()
+    request.form
+    # Reuse the same test logic through a redirect-friendly temporary result page.
+    c=conn(); results=[]
+    for r in c.execute("""SELECT m.id,c.name,c.address,c.port,c.protocol,u.username
+                          FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id
+                          ORDER BY c.name,u.username""").fetchall():
+        try:
+            with socket.create_connection((r["address"],int(r["port"])),timeout=0.8):
+                results.append({"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"reachable","detail":f"TCP {r['port']} open"})
+        except OSError as exc:
+            results.append({"id":r["id"],"computer":r["name"],"username":r["username"],"protocol":r["protocol"],"status":"unreachable","detail":str(exc)})
+    c.close()
+    write_audit("mapping_test_all","mapping",details={"count":len(results)})
+    return render_template("mapping_test.html",results=results)
+
 def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
