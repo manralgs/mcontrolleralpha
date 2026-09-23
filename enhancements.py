@@ -721,6 +721,68 @@ def _start_discovery_scheduler(app):
     app._discovery_scheduler_started=True
     threading.Thread(target=_discovery_scheduler_loop,name="discovery-scheduler",daemon=True).start()
 
+
+def _connection_history_init():
+    c=conn()
+    c.execute("""CREATE TABLE IF NOT EXISTS connection_history(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mapping_id INTEGER,
+        computer_id INTEGER NOT NULL REFERENCES computers(id) ON DELETE CASCADE,
+        user_id INTEGER,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        result TEXT NOT NULL,
+        protocol TEXT NOT NULL,
+        address TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        detail TEXT
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_connection_history_computer ON connection_history(computer_id,started_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_connection_history_result ON connection_history(result)")
+    c.commit(); c.close()
+
+@enhancements.route("/connections")
+@require("view")
+def connection_history():
+    _connection_history_init()
+    q=request.args.get("q","").strip()
+    c=conn()
+    params=[]; where=""
+    if q:
+        where="WHERE c.name LIKE ? OR c.address LIKE ? OR COALESCE(u.username,'') LIKE ?"
+        params=[f"%{q}%",f"%{q}%",f"%{q}%"]
+    rows=c.execute("""SELECT h.*,c.name computer,COALESCE(u.username,'') username
+                      FROM connection_history h JOIN computers c ON c.id=h.computer_id
+                      LEFT JOIN users u ON u.id=h.user_id
+                      """+where+" ORDER BY h.id DESC LIMIT 250",params).fetchall()
+    c.close()
+    return render_template("connections.html",rows=rows,q=q)
+
+@enhancements.route("/connections/<int:history_id>")
+@require("view")
+def connection_detail(history_id):
+    _connection_history_init()
+    c=conn()
+    row=c.execute("""SELECT h.*,c.name computer,COALESCE(u.username,'') username
+                     FROM connection_history h JOIN computers c ON c.id=h.computer_id
+                     LEFT JOIN users u ON u.id=h.user_id WHERE h.id=?""",(history_id,)).fetchone()
+    c.close()
+    if not row: abort(404)
+    return render_template("connection_detail.html",row=row)
+
+def _record_connection(mapping_id, result, detail):
+    _connection_history_init()
+    c=conn()
+    mapping=c.execute("""SELECT m.id,c.id computer_id,u.id user_id,c.name,c.address,c.protocol,c.port,u.username
+                         FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id
+                         WHERE m.id=?""",(mapping_id,)).fetchone()
+    if not mapping: c.close(); return
+    now=datetime.now().isoformat(timespec="seconds")
+    c.execute("""INSERT INTO connection_history(mapping_id,computer_id,user_id,started_at,ended_at,result,protocol,address,port,detail)
+                 VALUES(?,?,?,?,?,?,?,?,?,?)""",
+              (mapping["id"],mapping["computer_id"],mapping["user_id"],now,now,result,mapping["protocol"],mapping["address"],mapping["port"],detail))
+    c.commit(); c.close()
+
 def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
