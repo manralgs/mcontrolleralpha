@@ -62,6 +62,12 @@ def db():
       release_notes TEXT,created_at TEXT NOT NULL
     );
     """)
+    # Lightweight schema migration for databases created by earlier mController builds.
+    existing={row["name"] for row in c.execute("PRAGMA table_info(computers)").fetchall()}
+    for column, definition in (("os", "TEXT NOT NULL DEFAULT 'Windows'"),("status", "TEXT NOT NULL DEFAULT 'unknown'"),("last_seen", "TEXT")):
+        if column not in existing:
+            c.execute(f"ALTER TABLE computers ADD COLUMN {column} {definition}")
+    c.commit()
     return c
 
 def hash_password(password):
