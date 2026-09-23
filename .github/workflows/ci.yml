@@ -29,7 +29,7 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
       - name: Compile application
-        run: python -m py_compile app.py enhancements.py update_watchdog.py
+        run: python -m py_compile app.py enhancements.py deployment.py update_watchdog.py
 
       - name: Run security regression tests
         env:
