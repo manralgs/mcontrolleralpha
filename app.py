@@ -17,6 +17,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
+import hmac
 from enhancements import register_enhancements
 
 DB = os.environ.get("MCONTROLLER_DB", "mcontroller.db")
@@ -24,6 +25,30 @@ ARCHIVE_ROOT = Path(os.environ.get("MCONTROLLER_ARCHIVE_ROOT", "archives")).reso
 app = Flask(__name__)
 app.secret_key = os.environ.get("MCONTROLLER_SECRET_KEY") or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+app.config.update(SESSION_COOKIE_SECURE=os.environ.get("MCONTROLLER_SECURE_COOKIE","0")=="1")
+
+@app.context_processor
+def security_context():
+    token=session.get("_csrf")
+    if not token:
+        token=secrets.token_urlsafe(32)
+        session["_csrf"]=token
+    return {"csrf_token":token}
+
+@app.before_request
+def csrf_protect():
+    if request.method in ("POST","PUT","PATCH","DELETE") and request.endpoint not in ("login","setup"):
+        expected=session.get("_csrf","")
+        supplied=request.form.get("_csrf") or request.headers.get("X-CSRF-Token","")
+        if not expected or not supplied or not hmac.compare_digest(expected,supplied): abort(400,description="Invalid CSRF token.")
+
+@app.after_request
+def security_headers(response):
+    response.headers["X-Content-Type-Options"]="nosniff"
+    response.headers["X-Frame-Options"]="SAMEORIGIN"
+    response.headers["Referrer-Policy"]="same-origin"
+    response.headers["Content-Security-Policy"]="default-src self; frame-ancestors self"
+    return response
 
 ROLES = ("admin", "operator", "viewer")
 ROLE_PERMISSIONS = {
