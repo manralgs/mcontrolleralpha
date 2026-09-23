@@ -2,6 +2,9 @@ import os
 import json
 import sqlite3
 import socket
+import subprocess
+import shlex
+import shutil
 from datetime import datetime
 from functools import wraps
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort
@@ -80,6 +83,61 @@ def _targets(c, target_type, target_ids):
                WHERE gm.group_id IN (%s) ORDER BY c.name""" % ",".join("?" * len(ids)), ids
         ).fetchall()
     return []
+
+
+def _ssh_identity():
+    key = os.environ.get("MCONTROLLER_SSH_KEY", "").strip()
+    if not key:
+        raise RuntimeError("MCONTROLLER_SSH_KEY is not configured.")
+    path = os.path.abspath(os.path.expanduser(key))
+    if not os.path.isfile(path):
+        raise RuntimeError("Configured SSH key does not exist.")
+    if shutil.which("ssh") is None:
+        raise RuntimeError("OpenSSH client is not installed on the controller.")
+    return path
+
+def _mapped_username(c, computer_id):
+    rows = c.execute("""SELECT u.username FROM mappings m
+                        JOIN users u ON u.id=m.user_id
+                        WHERE m.computer_id=? ORDER BY m.id""", (computer_id,)).fetchall()
+    if len(rows) != 1:
+        raise RuntimeError("Deployment requires exactly one remote-user mapping for the computer.")
+    return rows[0]["username"]
+
+def _ssh_command(address, port, username, command, key, timeout=60):
+    target = f"{username}@{address}"
+    return subprocess.run(
+        ["ssh", "-i", key, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+         "-o", "ConnectTimeout=10", "-p", str(int(port)), target, command],
+        capture_output=True, text=True, timeout=timeout, check=False
+    )
+
+def _deploy_ssh(update, target, username):
+    if target["os"].strip().lower() not in {"linux", "macos", "mac os", "darwin"}:
+        raise RuntimeError("SSH deployment adapter currently supports Linux and macOS targets only.")
+    if not update["package_url"]:
+        raise RuntimeError("Software release has no package URL.")
+    if not update["install_command"]:
+        raise RuntimeError("Software release has no install command.")
+    key = _ssh_identity()
+    package_url = update["package_url"]
+    remote_dir = "/tmp/mcontroller-deploy"
+    package = remote_dir + "/" + os.path.basename(urlparse(package_url).path or "package")
+    prep = (
+        "set -eu; mkdir -p " + shlex.quote(remote_dir) +
+        "; curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 " +
+        shlex.quote(package_url) + " -o " + shlex.quote(package)
+    )
+    result = _ssh_command(target["address"], target["port"], username, prep, key, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Remote package download failed").strip()[-2000:])
+    install = "set -eu; " + update["install_command"]
+    install = install.replace("{package}", shlex.quote(package))
+    install_result = _ssh_command(target["address"], target["port"], username, install, key, timeout=600)
+    _ssh_command(target["address"], target["port"], username, "rm -f " + shlex.quote(package), key, timeout=30)
+    if install_result.returncode != 0:
+        raise RuntimeError((install_result.stderr or install_result.stdout or "Remote installation failed").strip()[-2000:])
+    return (install_result.stdout or "Deployment completed.").strip()[-2000:]
 
 def _preflight_target(row, timeout=1.0):
     try:
@@ -190,6 +248,61 @@ def preflight(job_id):
     c.commit()
     c.close()
     flash(f"Preflight complete: {ready} reachable, {failed} failed.")
+    return redirect(url_for("deployment.job_detail", job_id=job_id))
+
+
+@deployment.route("/deployment/job/<int:job_id>/dispatch", methods=["POST"])
+@_require("deploy")
+def dispatch(job_id):
+    _init()
+    c = conn()
+    job = c.execute("""SELECT j.*,s.name software,s.version,s.platform,s.package_url,s.install_command
+                       FROM deployment_jobs j JOIN software_updates s ON s.id=j.software_update_id
+                       WHERE j.id=?""", (job_id,)).fetchone()
+    targets = c.execute("""SELECT t.*,c.name computer,c.address,c.protocol,c.port,c.os
+                           FROM deployment_targets t JOIN computers c ON c.id=t.computer_id
+                           WHERE t.job_id=? AND t.status='ready' ORDER BY c.name""", (job_id,)).fetchall()
+    if not job:
+        c.close()
+        abort(404)
+    if job["status"] not in {"ready", "partial"}:
+        c.close()
+        flash("Run preflight successfully before dispatch.")
+        return redirect(url_for("deployment.job_detail", job_id=job_id))
+    if job["platform"].strip().lower() not in {"linux", "macos"}:
+        c.close()
+        flash("Current transport supports Linux/macOS releases only.")
+        return redirect(url_for("deployment.job_detail", job_id=job_id))
+    now = datetime.now().isoformat(timespec="seconds")
+    c.execute("UPDATE deployment_jobs SET status='running',started_at=?,detail=? WHERE id=?",
+              (now, now, job_id))
+    c.commit()
+    for target in targets:
+        started = datetime.now().isoformat(timespec="seconds")
+        c.execute("UPDATE deployment_targets SET status='running',started_at=?,detail=? WHERE id=?",
+                  (started, "Dispatching over SSH.", target["id"]))
+        c.commit()
+        try:
+            username = _mapped_username(c, target["computer_id"])
+            detail = _deploy_ssh(job, target, username)
+            status = "completed"
+        except Exception as exc:
+            detail = str(exc)
+            status = "failed"
+        finished = datetime.now().isoformat(timespec="seconds")
+        c.execute("UPDATE deployment_targets SET status=?,completed_at=?,detail=? WHERE id=?",
+                  (status, finished, detail, target["id"]))
+        c.commit()
+    failed = c.execute("SELECT COUNT(*) n FROM deployment_targets WHERE job_id=? AND status='failed'",(job_id,)).fetchone()["n"]
+    completed = c.execute("SELECT COUNT(*) n FROM deployment_targets WHERE job_id=? AND status='completed'",(job_id,)).fetchone()["n"]
+    remaining = c.execute("SELECT COUNT(*) n FROM deployment_targets WHERE job_id=? AND status IN ('queued','ready','running')",(job_id,)).fetchone()["n"]
+    final = "completed" if completed and not failed and not remaining else ("failed" if failed and not completed else "partial")
+    c.execute("UPDATE deployment_jobs SET status=?,completed_at=?,detail=? WHERE id=?",
+              (final, datetime.now().isoformat(timespec="seconds"),
+               json.dumps({"completed":completed,"failed":failed,"remaining":remaining}), job_id))
+    c.commit()
+    c.close()
+    flash(f"Deployment finished: {completed} completed, {failed} failed.")
     return redirect(url_for("deployment.job_detail", job_id=job_id))
 
 @deployment.route("/deployment/job/<int:job_id>/cancel", methods=["POST"])
