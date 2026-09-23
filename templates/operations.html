@@ -10,7 +10,7 @@
 <label>Protocol<select name="protocol"><option value="">All protocols</option><option value="rdp" {% if protocol=="rdp" %}selected{% endif %}>RDP</option><option value="ssh" {% if protocol=="ssh" %}selected{% endif %}>SSH</option><option value="vnc" {% if protocol=="vnc" %}selected{% endif %}>VNC</option></select></label>
 <div><button class="btn primary">Apply filters</button> <a class="btn secondary" href="/operations">Reset</a></div>
 </form></div>
-<form method="post" action="/operations/computers/bulk-delete" onsubmit="return confirm('Delete all selected computers and their mappings?')">
+<form method="post" action="/operations/computers/bulk-delete" onsubmit="return confirm('Delete all selected computers and their mappings?')"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
 <div class="card table-wrap">
 <div class="card-head"><div><h3>Computer results</h3><p>Select records for bulk actions.</p></div><button class="btn danger" type="submit">Delete selected</button></div>
 <table><thead><tr><th><input type="checkbox" onclick="document.querySelectorAll('.row-check').forEach(x=>x.checked=this.checked)"></th><th>Name</th><th>Address</th><th>OS</th><th>Protocol</th><th>Status</th><th>Last seen</th></tr></thead>
