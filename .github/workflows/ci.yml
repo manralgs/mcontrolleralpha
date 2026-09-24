@@ -59,7 +59,7 @@ jobs:
           from zipfile import ZIP_DEFLATED, ZipFile
 
           root = Path(".").resolve()
-          output = root / f"mcontrolleralpha-{os.environ['RELEASE_SHA'][:12]}.zip"
+          output = root / f"mcontrolleralpha-{os.environ['RELEASE_SHA']}.zip"
           excluded = {".git", ".venv", "__pycache__", "runtime", "archives", "mcontroller.db", ".env", output.name}
 
           with ZipFile(output, "w", ZIP_DEFLATED) as archive:
