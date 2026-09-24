@@ -40,6 +40,39 @@ The API endpoint `/api/archives` returns the archive metadata and relative brows
 
 ## Apache Guacamole
 
+The repository includes a Docker Compose stack for Apache Guacamole 1.6.0 with PostgreSQL and `guacd`. Apache Guacamole 1.6.0 is the current stable release documented by Apache Guacamole. citeturn549570search0turn549570search3
+
+Start the Guacamole stack from the repository root:
+
+```bash
+docker compose up -d
+```
+
+Check the services:
+
+```bash
+docker compose ps
+docker compose logs guacamole --tail 100
+```
+
+Open:
+
+```text
+http://localhost:8080/guacamole/
+```
+
+The default PostgreSQL password in the Compose file is intentionally a placeholder. Set `GUACAMOLE_POSTGRES_PASSWORD` before using the stack beyond local testing. You can also change `GUACAMOLE_POSTGRES_DB`, `GUACAMOLE_POSTGRES_USER`, and `GUACAMOLE_PORT`.
+
+For GitHub Codespaces, forward port 8080 from the **PORTS** panel and open the forwarded URL in the browser.
+
+mController already defaults its Guacamole setting to `http://localhost:8080/guacamole/`. To override it for a different Guacamole URL, set:
+
+```bash
+export GUACAMOLE_URL="http://localhost:8080/guacamole/"
+```
+
+## Apache Guacamole
+
 Set `GUACAMOLE_URL` to the URL of the Guacamole web application.
 
 ## Security
