@@ -230,6 +230,50 @@ class MControllerDeploymentTests(unittest.TestCase):
             "target_ids": ["1"],
         })
         self.assertEqual(response.status_code, 403)
+    def test_dispatch_passes_release_sha256_to_transport(self):
+        import deployment
+        self._login("admin")
+        sha256 = "a" * 64
+        c = sqlite3.connect(self.db)
+        c.execute(
+            "INSERT INTO software_updates(name,version,platform,package_url,install_command,release_notes,created_at,sha256) VALUES(?,?,?,?,?,?,?,?)",
+            ("Test App", "1.2.3", "Linux", "https://updates.example.test/app.tar.gz",
+             "sudo installer --package {package}", "", datetime.now().isoformat(timespec="seconds"), sha256),
+        )
+        update_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.execute(
+            "INSERT INTO computers(name,address,protocol,port,os,status,last_seen) VALUES(?,?,?,?,?,?,?)",
+            ("deploy-host", "10.0.0.10", "ssh", 22, "Linux", "ready", datetime.now().isoformat(timespec="seconds")),
+        )
+        computer_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.execute("INSERT INTO users(username,display_name) VALUES(?,?)", ("deploy", "Deploy User"))
+        user_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.execute("INSERT INTO mappings(computer_id,user_id) VALUES(?,?)", (computer_id, user_id))
+        c.execute(
+            "INSERT INTO deployment_jobs(name,software_update_id,created_at,created_by,status,detail) VALUES(?,?,?,?,?,?)",
+            ("Test deployment", update_id, datetime.now().isoformat(timespec="seconds"), 1, "ready", "preflight ok"),
+        )
+        job_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.execute(
+            "INSERT INTO deployment_targets(job_id,computer_id,status) VALUES(?,?,?)",
+            (job_id, computer_id, "ready"),
+        )
+        c.commit()
+        c.close()
+
+        with self.client.session_transaction() as sess:
+            sess["_csrf"] = "test-csrf"
+
+        with patch.object(deployment, "_deploy_ssh", return_value="ok") as deploy:
+            response = self.client.post(
+                f"/deployment/job/{job_id}/dispatch",
+                data={"_csrf": "test-csrf"},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        deploy.assert_called_once()
+        self.assertEqual(deploy.call_args.args[0]["sha256"], sha256)
+
     def test_deployment_post_without_csrf_is_rejected(self):
         self._login("admin")
         response = self.client.post("/deployment/job", data={
