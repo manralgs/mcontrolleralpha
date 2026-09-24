@@ -1,6 +1,11 @@
 import os
 import json
 import sqlite3
+import ipaddress
+import socket
+import time
+import threading
+from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, abort, Response, send_file
@@ -608,10 +613,14 @@ def _discovery_init():
         name TEXT NOT NULL UNIQUE,
         target TEXT NOT NULL,
         ports TEXT NOT NULL DEFAULT '22,3389,5900',
+        interval_minutes INTEGER NOT NULL DEFAULT 60,
         enabled INTEGER NOT NULL DEFAULT 1,
         last_run TEXT,
         created_at TEXT NOT NULL
     )""")
+    existing={row["name"] for row in c.execute("PRAGMA table_info(discovery_jobs)").fetchall()}
+    if "interval_minutes" not in existing:
+        c.execute("ALTER TABLE discovery_jobs ADD COLUMN interval_minutes INTEGER NOT NULL DEFAULT 60")
     c.execute("""CREATE TABLE IF NOT EXISTS discovery_results(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         job_id INTEGER NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
@@ -653,11 +662,20 @@ def discovery():
     if request.method=="POST":
         name=request.form.get("name","").strip(); target=request.form.get("target","").strip()
         ports=request.form.get("ports","22,3389,5900").strip()
+        try:
+            interval_minutes=int(request.form.get("interval_minutes","60").strip() or "60")
+        except ValueError:
+            interval_minutes=60
+        interval_minutes=min(max(interval_minutes,5),1440)
         if name and target:
             try:
-                ipaddress.ip_network(target,strict=False)
-                c.execute("INSERT INTO discovery_jobs(name,target,ports,enabled,created_at) VALUES(?,?,?,?,?)",
-                          (name,target,ports,1,datetime.now().isoformat(timespec="seconds"))); c.commit()
+                network=ipaddress.ip_network(target,strict=False)
+                if network.version!=4 or not network.is_private or network.prefixlen<16 or len(list(network.hosts()))>1024:
+                    raise ValueError("Discovery requires a private IPv4 /16-/32 range with at most 1024 hosts.")
+                if not any(x.strip().isdigit() and 1<=int(x.strip())<=65535 for x in ports.split(",")):
+                    raise ValueError("Enter at least one valid TCP port.")
+                c.execute("INSERT INTO discovery_jobs(name,target,ports,interval_minutes,enabled,created_at) VALUES(?,?,?,?,?,?)",
+                          (name,target,ports,interval_minutes,1,datetime.now().isoformat(timespec="seconds"))); c.commit()
                 flash("Discovery job created.")
             except (ValueError,sqlite3.IntegrityError) as exc: flash("Unable to create job: "+str(exc))
         return redirect(url_for("enhancements.discovery"))
@@ -715,7 +733,7 @@ def _discovery_scheduler_loop():
                 if job["last_run"]:
                     try: last=datetime.fromisoformat(job["last_run"]).timestamp()
                     except ValueError: last=0
-                interval=job.get("interval_minutes",60) if hasattr(job,"keys") and "interval_minutes" in job.keys() else 60
+                interval=int(job["interval_minutes"]) if "interval_minutes" in job.keys() and job["interval_minutes"] else 60
                 if now-last >= max(int(interval),5)*60:
                     try: _run_discovery(job)
                     except Exception: pass
@@ -807,6 +825,7 @@ def register_enhancements(app):
     ensure_tables()
     ensure_import_tables()
     app.register_blueprint(enhancements)
+    _start_discovery_scheduler(app)
 
     @app.after_request
     def audit_mutations(response):
