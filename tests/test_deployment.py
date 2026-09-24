@@ -180,11 +180,18 @@ class MControllerDeploymentTests(unittest.TestCase):
         self.assertIn("/tmp/mcontroller-deploy-111111111111111111111111", paths)
         self.assertIn("/tmp/mcontroller-deploy-222222222222222222222222", paths)
 
-    def test_viewer_cannot_access_deployment_center(self):
+    def test_viewer_cannot_create_deployment(self):
         self._login("viewer")
-        response = self.client.get("/deployment")
+        with self.client.session_transaction() as sess:
+            sess["_csrf"] = "test-csrf"
+        response = self.client.post("/deployment/job", data={
+            "_csrf": "test-csrf",
+            "name": "Test deployment",
+            "software_update_id": "1",
+            "target_type": "computer",
+            "target_ids": ["1"],
+        })
         self.assertEqual(response.status_code, 403)
-
     def test_deployment_post_without_csrf_is_rejected(self):
         self._login("admin")
         response = self.client.post("/deployment/job", data={
