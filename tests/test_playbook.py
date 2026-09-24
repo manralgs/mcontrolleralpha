@@ -112,6 +112,7 @@ class MControllerPlaybookTests(unittest.TestCase):
 
     def test_discovery_run_executes_and_records_endpoint(self):
         self._login()
+        self.enhancements_module._discovery_init()
         now = datetime.now().isoformat(timespec="seconds")
         c = sqlite3.connect(self.db)
         c.execute(
