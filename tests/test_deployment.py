@@ -140,6 +140,44 @@ class MControllerDeploymentTests(unittest.TestCase):
 
         self.assertEqual(len([c for c in calls if c.startswith("rm -rf ")]), 1)
 
+    def test_success_reports_cleanup_failure(self):
+        import deployment
+        calls = []
+
+        def command(address, port, username, command, key, timeout=60):
+            calls.append(command)
+            if command.startswith("rm -rf "):
+                return self._result(1, stderr="cleanup failed")
+            return self._result(stdout="installed")
+
+        with patch.object(deployment, "_ssh_identity", return_value="/tmp/key"), \
+             patch.object(deployment, "_ssh_command", side_effect=command):
+            with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                deployment._deploy_ssh(self._update(), self._target(), "deploy")
+
+        self.assertEqual(len([c for c in calls if c.startswith("rm -rf ")]), 1)
+
+    def test_install_failure_preserves_cleanup_failure_context(self):
+        import deployment
+        calls = []
+
+        def command(address, port, username, command, key, timeout=60):
+            calls.append(command)
+            if "curl --fail" in command:
+                return self._result()
+            if command.startswith("set -eu; sudo installer"):
+                return self._result(1, stderr="install failed")
+            if command.startswith("rm -rf "):
+                return self._result(1, stderr="cleanup failed")
+            return self._result()
+
+        with patch.object(deployment, "_ssh_identity", return_value="/tmp/key"), \
+             patch.object(deployment, "_ssh_command", side_effect=command):
+            with self.assertRaisesRegex(RuntimeError, "install failed.*cleanup failed"):
+                deployment._deploy_ssh(self._update(), self._target(), "deploy")
+
+        self.assertEqual(len([c for c in calls if c.startswith("rm -rf ")]), 1)
+
     def test_install_failure_cleans_up(self):
         import deployment
         calls = []
