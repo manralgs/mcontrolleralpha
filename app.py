@@ -51,7 +51,7 @@ def security_headers(response):
     response.headers["X-Content-Type-Options"]="nosniff"
     response.headers["X-Frame-Options"]="SAMEORIGIN"
     response.headers["Referrer-Policy"]="same-origin"
-    response.headers["Content-Security-Policy"]="default-src self; frame-ancestors self"
+    response.headers["Content-Security-Policy"]="default-src 'self'; frame-ancestors 'self'"
     return response
 
 ROLES = ("admin", "operator", "viewer")
@@ -387,7 +387,7 @@ def _apply_update(root):
 
 def _restart_server():
     time.sleep(0.75)
-    command=os.environ.get("MCONTROLLER_RESTART_COMMAND","").strip()
+    command=get_setting("restart_command", os.environ.get("MCONTROLLER_RESTART_COMMAND","")).strip()
     if command:
         os.system(command)
         return
@@ -404,7 +404,7 @@ def _start_update_watchdog(backup):
     env["MCONTROLLER_UPDATE_BACKUP"]=str(backup)
     env["MCONTROLLER_UPDATE_PROJECT"]=str(project)
     env["MCONTROLLER_UPDATE_PORT"]=str(port)
-    env["MCONTROLLER_UPDATE_COMMAND"]=os.environ.get("MCONTROLLER_RESTART_COMMAND","").strip()
+    env["MCONTROLLER_UPDATE_COMMAND"]=get_setting("restart_command", os.environ.get("MCONTROLLER_RESTART_COMMAND","")).strip()
     env["MCONTROLLER_UPDATE_OLD_START_ID"]=SERVER_START_ID
     subprocess.Popen([sys.executable,str(watchdog)],env=env,
                      stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
@@ -485,6 +485,482 @@ def _scan_host(address, ports):
         "ports": opened,
         "protocol": protocol_for_port(opened[0]),
     }
+
+@app.route("/computers", methods=["GET", "POST"])
+@permission_required("manage_computers")
+def computers():
+    c=db()
+    if request.method=="POST":
+        name=request.form.get("name","").strip()
+        address=request.form.get("address","").strip()
+        os_name=request.form.get("os","Windows").strip()
+        protocol=request.form.get("protocol","rdp").strip().lower()
+        try:
+            port=int(request.form.get("port","3389"))
+        except ValueError:
+            port=0
+        if not name or not address:
+            flash("Computer name and address are required.")
+        elif os_name not in {"Windows","Linux","macOS","Unknown"}:
+            flash("Invalid operating system.")
+        elif protocol not in {"ssh","rdp","vnc"} or not 1<=port<=65535:
+            flash("Invalid protocol or port.")
+        else:
+            try:
+                c.execute("INSERT INTO computers(name,address,protocol,port,os,status,last_seen) VALUES(?,?,?,?,?,?,?)",
+                          (name,address,protocol,port,os_name,"unknown",None))
+                c.commit()
+                flash(f"Computer {name} added.")
+            except sqlite3.IntegrityError:
+                c.rollback()
+                flash("A computer with that name already exists.")
+        c.close()
+        return redirect(url_for("computers"))
+    rows=c.execute("SELECT * FROM computers ORDER BY name").fetchall()
+    c.close()
+    return render_template("computers.html",rows=rows)
+
+@app.route("/computers/<int:item_id>/update", methods=["POST"])
+@permission_required("manage_computers")
+def computer_update(item_id):
+    name=request.form.get("name","").strip()
+    address=request.form.get("address","").strip()
+    os_name=request.form.get("os","Unknown").strip()
+    protocol=request.form.get("protocol","ssh").strip().lower()
+    try:
+        port=int(request.form.get("port","22"))
+    except ValueError:
+        port=0
+    if not name or not address or os_name not in {"Windows","Linux","macOS","Unknown"} or protocol not in {"ssh","rdp","vnc"} or not 1<=port<=65535:
+        flash("Invalid computer details.")
+        return redirect(url_for("computers"))
+    c=db()
+    try:
+        c.execute("UPDATE computers SET name=?,address=?,os=?,protocol=?,port=? WHERE id=?",
+                  (name,address,os_name,protocol,port,item_id))
+        if c.total_changes==0:
+            flash("Computer not found.")
+        else:
+            c.commit()
+            flash(f"Computer {name} updated.")
+    except sqlite3.IntegrityError:
+        c.rollback()
+        flash("A computer with that name already exists.")
+    finally:
+        c.close()
+    return redirect(url_for("computers"))
+
+@app.route("/computers/<int:item_id>/delete", methods=["POST"])
+@permission_required("manage_computers")
+def computer_delete(item_id):
+    c=db()
+    c.execute("DELETE FROM computers WHERE id=?",(item_id,))
+    deleted=c.total_changes
+    c.commit()
+    c.close()
+    flash("Computer deleted." if deleted else "Computer not found.")
+    return redirect(url_for("computers"))
+
+@app.route("/users", methods=["GET", "POST"])
+@permission_required("manage_users")
+def users():
+    c=db()
+    if request.method=="POST":
+        username=request.form.get("username","").strip()
+        display_name=request.form.get("display_name","").strip()
+        if not username:
+            flash("Remote username is required.")
+        else:
+            try:
+                c.execute("INSERT INTO users(username,display_name) VALUES(?,?)",(username,display_name))
+                c.commit()
+                flash(f"Remote user {username} added.")
+            except sqlite3.IntegrityError:
+                c.rollback()
+                flash("A remote user with that username already exists.")
+        c.close()
+        return redirect(url_for("users"))
+    rows=c.execute("SELECT * FROM users ORDER BY username").fetchall()
+    c.close()
+    return render_template("users.html",rows=rows)
+
+@app.route("/users/<int:item_id>/update", methods=["POST"])
+@permission_required("manage_users")
+def user_update(item_id):
+    username=request.form.get("username","").strip()
+    display_name=request.form.get("display_name","").strip()
+    if not username:
+        flash("Remote username is required.")
+        return redirect(url_for("users"))
+    c=db()
+    try:
+        c.execute("UPDATE users SET username=?,display_name=? WHERE id=?",(username,display_name,item_id))
+        if c.total_changes==0:
+            flash("Remote user not found.")
+        else:
+            c.commit()
+            flash(f"Remote user {username} updated.")
+    except sqlite3.IntegrityError:
+        c.rollback()
+        flash("A remote user with that username already exists.")
+    finally:
+        c.close()
+    return redirect(url_for("users"))
+
+@app.route("/users/<int:item_id>/delete", methods=["POST"])
+@permission_required("manage_users")
+def user_delete(item_id):
+    c=db()
+    c.execute("DELETE FROM users WHERE id=?",(item_id,))
+    deleted=c.total_changes
+    c.commit()
+    c.close()
+    flash("Remote user deleted." if deleted else "Remote user not found.")
+    return redirect(url_for("users"))
+
+@app.route("/mappings", methods=["GET", "POST"])
+@permission_required("manage_computers")
+def mappings():
+    c=db()
+    if request.method=="POST":
+        try:
+            computer_id=int(request.form.get("computer_id","0"))
+            user_id=int(request.form.get("user_id","0"))
+            c.execute("INSERT INTO mappings(computer_id,user_id) VALUES(?,?)",(computer_id,user_id))
+            c.commit()
+            flash("Mapping created.")
+        except (ValueError,sqlite3.IntegrityError):
+            c.rollback()
+            flash("Unable to create that mapping.")
+        c.close()
+        return redirect(url_for("mappings"))
+    computers=c.execute("SELECT * FROM computers ORDER BY name").fetchall()
+    users=c.execute("SELECT * FROM users ORDER BY username").fetchall()
+    rows=c.execute("""SELECT m.id,m.computer_id,m.user_id,c.name,c.address,c.protocol,c.os,u.username
+                      FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id
+                      ORDER BY c.name,u.username""").fetchall()
+    c.close()
+    return render_template("mappings.html",computers=computers,users=users,rows=rows)
+
+@app.route("/mappings/<int:item_id>/update", methods=["POST"])
+@permission_required("manage_computers")
+def mapping_update(item_id):
+    try:
+        computer_id=int(request.form.get("computer_id","0"))
+        user_id=int(request.form.get("user_id","0"))
+    except ValueError:
+        flash("Invalid mapping.")
+        return redirect(url_for("mappings"))
+    c=db()
+    try:
+        c.execute("UPDATE mappings SET computer_id=?,user_id=? WHERE id=?",(computer_id,user_id,item_id))
+        if c.total_changes==0:
+            flash("Mapping not found.")
+        else:
+            c.commit()
+            flash("Mapping updated.")
+    except sqlite3.IntegrityError:
+        c.rollback()
+        flash("Unable to update that mapping.")
+    finally:
+        c.close()
+    return redirect(url_for("mappings"))
+
+@app.route("/mappings/<int:item_id>/delete", methods=["POST"])
+@permission_required("manage_computers")
+def mapping_delete(item_id):
+    c=db()
+    c.execute("DELETE FROM mappings WHERE id=?",(item_id,))
+    deleted=c.total_changes
+    c.commit()
+    c.close()
+    flash("Mapping deleted." if deleted else "Mapping not found.")
+    return redirect(url_for("mappings"))
+
+@app.route("/groups", methods=["GET", "POST"])
+@permission_required("manage_groups")
+def groups():
+    c=db()
+    if request.method=="POST":
+        name=request.form.get("name","").strip()
+        description=request.form.get("description","").strip()
+        if not name:
+            flash("Group name is required.")
+        else:
+            try:
+                c.execute("INSERT INTO computer_groups(name,description) VALUES(?,?)",(name,description))
+                c.commit()
+                flash(f"Group {name} created.")
+            except sqlite3.IntegrityError:
+                c.rollback()
+                flash("A group with that name already exists.")
+        c.close()
+        return redirect(url_for("groups"))
+    groups_data=[]
+    for g in c.execute("SELECT * FROM computer_groups ORDER BY name").fetchall():
+        members=c.execute("""SELECT m.id,c.name,c.address,c.protocol,c.os,u.username
+                             FROM computer_group_mappings gm
+                             JOIN mappings m ON m.id=gm.mapping_id
+                             JOIN computers c ON c.id=m.computer_id
+                             JOIN users u ON u.id=m.user_id
+                             WHERE gm.group_id=? ORDER BY c.name,u.username""",(g["id"],)).fetchall()
+        groups_data.append(dict(g,computer_count=len(members),computers=members))
+    available=c.execute("""SELECT m.id,c.name,c.address,c.protocol,c.os,u.username
+                           FROM mappings m JOIN computers c ON c.id=m.computer_id JOIN users u ON u.id=m.user_id
+                           ORDER BY c.name,u.username""").fetchall()
+    c.close()
+    return render_template("groups.html",groups=groups_data,available=available)
+
+@app.route("/groups/<int:group_id>/add", methods=["POST"])
+@permission_required("manage_groups")
+def group_add(group_id):
+    try:
+        mapping_id=int(request.form.get("mapping_id","0"))
+    except ValueError:
+        flash("Invalid mapping.")
+        return redirect(url_for("groups"))
+    c=db()
+    try:
+        c.execute("INSERT INTO computer_group_mappings(group_id,mapping_id) VALUES(?,?)",(group_id,mapping_id))
+        c.commit()
+        flash("Mapping added to group.")
+    except sqlite3.IntegrityError:
+        c.rollback()
+        flash("Unable to add that mapping to the group.")
+    finally:
+        c.close()
+    return redirect(url_for("groups"))
+
+@app.route("/groups/<int:group_id>/remove/<int:mapping_id>", methods=["POST"])
+@permission_required("manage_groups")
+def group_remove(group_id,mapping_id):
+    c=db()
+    c.execute("DELETE FROM computer_group_mappings WHERE group_id=? AND mapping_id=?",(group_id,mapping_id))
+    deleted=c.total_changes
+    c.commit()
+    c.close()
+    flash("Mapping removed." if deleted else "Mapping not found in group.")
+    return redirect(url_for("groups"))
+
+@app.route("/groups/<int:item_id>/update", methods=["POST"])
+@permission_required("manage_groups")
+def group_update(item_id):
+    name=request.form.get("name","").strip()
+    description=request.form.get("description","").strip()
+    if not name:
+        flash("Group name is required.")
+        return redirect(url_for("groups"))
+    c=db()
+    try:
+        c.execute("UPDATE computer_groups SET name=?,description=? WHERE id=?",(name,description,item_id))
+        if c.total_changes==0:
+            flash("Group not found.")
+        else:
+            c.commit()
+            flash(f"Group {name} updated.")
+    except sqlite3.IntegrityError:
+        c.rollback()
+        flash("A group with that name already exists.")
+    finally:
+        c.close()
+    return redirect(url_for("groups"))
+
+@app.route("/groups/<int:item_id>/delete", methods=["POST"])
+@permission_required("manage_groups")
+def group_delete(item_id):
+    c=db()
+    c.execute("DELETE FROM computer_groups WHERE id=?",(item_id,))
+    deleted=c.total_changes
+    c.commit()
+    c.close()
+    flash("Group deleted." if deleted else "Group not found.")
+    return redirect(url_for("groups"))
+
+@app.route("/admin/users", methods=["GET", "POST"])
+@permission_required("manage_users")
+def admin_users():
+    c=db()
+    if request.method=="POST":
+        username=request.form.get("username","").strip()
+        password=request.form.get("password","")
+        role=request.form.get("role","viewer").strip()
+        error=validate_password_policy(password)
+        if len(username)<3:
+            error="Username must be at least 3 characters."
+        elif role not in ROLES:
+            error="Invalid role."
+        if error:
+            flash(error)
+        else:
+            try:
+                c.execute("INSERT INTO accounts(username,password_hash,role,active,created_at) VALUES(?,?,?,?,?)",
+                          (username,hash_password(password),role,1,datetime.now().isoformat(timespec="seconds")))
+                c.commit()
+                flash(f"Account {username} created.")
+            except sqlite3.IntegrityError:
+                c.rollback()
+                flash("An account with that username already exists.")
+        c.close()
+        return redirect(url_for("admin_users"))
+    rows=c.execute("SELECT id,username,role,active,created_at FROM accounts ORDER BY username").fetchall()
+    c.close()
+    return render_template("admin_users.html",rows=rows,roles=ROLES)
+
+@app.route("/admin/users/<int:account_id>/update", methods=["POST"])
+@permission_required("manage_users")
+def admin_user_update(account_id):
+    username=request.form.get("username","").strip()
+    role=request.form.get("role","viewer").strip()
+    password=request.form.get("password","")
+    me=current_account()
+    c=db()
+    row=c.execute("SELECT * FROM accounts WHERE id=?",(account_id,)).fetchone()
+    if not row:
+        c.close()
+        flash("Account not found.")
+        return redirect(url_for("admin_users"))
+    if len(username)<3 or role not in ROLES:
+        c.close()
+        flash("Invalid account details.")
+        return redirect(url_for("admin_users"))
+    if me and me["id"]==account_id and role!="admin":
+        c.close()
+        flash("You cannot remove your own admin role.")
+        return redirect(url_for("admin_users"))
+    if password:
+        error=validate_password_policy(password)
+        if error:
+            c.close()
+            flash(error)
+            return redirect(url_for("admin_users"))
+        c.execute("UPDATE accounts SET username=?,role=?,password_hash=? WHERE id=?",
+                  (username,role,hash_password(password),account_id))
+    else:
+        c.execute("UPDATE accounts SET username=?,role=? WHERE id=?",(username,role,account_id))
+    c.commit()
+    c.close()
+    flash(f"Account {username} updated.")
+    return redirect(url_for("admin_users"))
+
+@app.route("/admin/users/<int:account_id>/toggle", methods=["POST"])
+@permission_required("manage_users")
+def admin_user_toggle(account_id):
+    me=current_account()
+    if me and me["id"]==account_id:
+        flash("You cannot disable your own account.")
+        return redirect(url_for("admin_users"))
+    c=db()
+    row=c.execute("SELECT role,active FROM accounts WHERE id=?",(account_id,)).fetchone()
+    if not row:
+        c.close()
+        flash("Account not found.")
+        return redirect(url_for("admin_users"))
+    if row["role"]=="admin" and row["active"]:
+        admins=c.execute("SELECT COUNT(*) n FROM accounts WHERE role='admin' AND active=1").fetchone()["n"]
+        if admins<=1:
+            c.close()
+            flash("The last active administrator cannot be disabled.")
+            return redirect(url_for("admin_users"))
+    c.execute("UPDATE accounts SET active=CASE active WHEN 1 THEN 0 ELSE 1 END WHERE id=?",(account_id,))
+    c.commit()
+    c.close()
+    flash("Account status updated.")
+    return redirect(url_for("admin_users"))
+
+@app.route("/admin/users/<int:account_id>/delete", methods=["POST"])
+@permission_required("manage_users")
+def admin_user_delete(account_id):
+    me=current_account()
+    if me and me["id"]==account_id:
+        flash("You cannot delete your own account.")
+        return redirect(url_for("admin_users"))
+    c=db()
+    row=c.execute("SELECT role,active FROM accounts WHERE id=?",(account_id,)).fetchone()
+    if not row:
+        c.close()
+        flash("Account not found.")
+        return redirect(url_for("admin_users"))
+    if row["role"]=="admin" and row["active"]:
+        admins=c.execute("SELECT COUNT(*) n FROM accounts WHERE role='admin' AND active=1").fetchone()["n"]
+        if admins<=1:
+            c.close()
+            flash("The last active administrator cannot be deleted.")
+            return redirect(url_for("admin_users"))
+    c.execute("DELETE FROM accounts WHERE id=?",(account_id,))
+    c.commit()
+    c.close()
+    flash("Account deleted.")
+    return redirect(url_for("admin_users"))
+
+@app.route("/settings", methods=["GET", "POST"])
+@permission_required("manage_updates")
+def settings():
+    if request.method=="POST":
+        guacamole_url=request.form.get("guacamole_url","").strip()
+        archive_root=request.form.get("archive_root","").strip() or "archives"
+        restart_command=request.form.get("restart_command","").strip()
+        try:
+            http_port=int(request.form.get("http_port","5000").strip() or "5000")
+        except ValueError:
+            http_port=0
+        if not 1<=http_port<=65535:
+            flash("HTTP port must be between 1 and 65535.")
+            return redirect(url_for("settings"))
+        set_setting("guacamole_url",guacamole_url)
+        set_setting("archive_root",archive_root)
+        set_setting("http_port",http_port)
+        set_setting("restart_command",restart_command)
+        flash("Server settings saved. HTTP port changes take effect after restart.")
+        return redirect(url_for("settings"))
+    return render_template("settings.html",settings=public_server_settings())
+
+@app.route("/settings/export")
+@permission_required("manage_updates")
+def settings_export():
+    payload={"type":"mcontroller-server-settings","version":1,"settings":public_server_settings()}
+    response=jsonify(payload)
+    response.headers["Content-Disposition"]="attachment; filename=mcontroller-server-settings.json"
+    return response
+
+@app.route("/settings/import", methods=["POST"])
+@permission_required("manage_updates")
+def settings_import():
+    uploaded=request.files.get("file")
+    if not uploaded:
+        flash("Select a settings JSON file.")
+        return redirect(url_for("settings"))
+    try:
+        payload=json.loads(uploaded.read().decode("utf-8"))
+        if payload.get("type")!="mcontroller-server-settings" or payload.get("version")!=1:
+            raise ValueError("Unsupported server settings file.")
+        values=payload.get("settings",{})
+        for key in ("guacamole_url","archive_root","http_port","restart_command"):
+            if key in values:
+                if key=="http_port":
+                    try: value=int(values[key])
+                    except (ValueError,TypeError): raise ValueError("Invalid HTTP port.")
+                    if not 1<=value<=65535: raise ValueError("Invalid HTTP port.")
+                else:
+                    value=str(values[key])
+                set_setting(key,value)
+        flash("Server settings imported. HTTP port changes take effect after restart.")
+    except Exception as exc:
+        flash(f"Settings import failed: {exc}")
+    return redirect(url_for("settings"))
+
+@app.route("/guacamole/<int:mapping_id>")
+@permission_required("remote")
+def guacamole(mapping_id):
+    c=db()
+    r=c.execute("""SELECT c.*,u.username FROM mappings m
+                   JOIN computers c ON c.id=m.computer_id
+                   JOIN users u ON u.id=m.user_id
+                   WHERE m.id=?""",(mapping_id,)).fetchone()
+    c.close()
+    if not r:
+        abort(404)
+    base=get_setting("guacamole_url", os.environ.get("GUACAMOLE_URL","http://localhost:8080/guacamole/"))
+    return render_template("guacamole.html",r=r,base=base)
 
 @app.route("/scan", methods=["GET", "POST"])
 @permission_required("scan")
@@ -599,7 +1075,7 @@ def _clear_login_failures():
 
 @app.route("/login", methods=["GET","POST"])
 def login():
-    if current_account(): return redirect(request.args.get("next") or url_for("index"))
+    if current_account(): return redirect(safe_next_url(request.args.get("next")))
     error=None
     if not _login_allowed():
         return render_template("login.html",error="Too many failed attempts. Try again later.",next=request.args.get("next","")), 429
@@ -618,7 +1094,7 @@ def login():
         error="Invalid username or password."
     return render_template("login.html",error=error,next=request.args.get("next",""))
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return redirect(url_for("login"))
@@ -840,4 +1316,6 @@ register_deployment(app)
 if __name__=="__main__":
     ensure_env_admin()
     db().close()
-    app.run(host="0.0.0.0",port=int(os.environ.get("PORT","5000")),debug=False)
+    ARCHIVE_ROOT=Path(get_setting("archive_root", os.environ.get("MCONTROLLER_ARCHIVE_ROOT","archives"))).expanduser().resolve()
+    port=int(get_setting("http_port", os.environ.get("PORT","5000")))
+    app.run(host="0.0.0.0",port=port,debug=False)
