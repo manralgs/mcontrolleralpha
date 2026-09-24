@@ -465,6 +465,86 @@ def probe_host(address, ports, timeout=0.35):
 def protocol_for_port(port):
     return {22:"ssh",3389:"rdp",5900:"vnc",5901:"vnc"}.get(port,"ssh")
 
+def _validate_scan_network(target):
+    network = ipaddress.ip_network(target, strict=False)
+    if network.version != 4 or not network.is_private:
+        raise ValueError("Scan requires a private IPv4 network.")
+    if network.prefixlen < 16:
+        raise ValueError("Scan is limited to /16 through /32 networks.")
+    hosts = list(network.hosts())
+    if len(hosts) > 1024:
+        raise ValueError("Scan is limited to 1024 addresses per request.")
+    return hosts
+
+def _scan_host(address, ports):
+    opened = probe_host(address, ports, timeout=0.35)
+    if not opened:
+        return None
+    return {
+        "address": address,
+        "ports": opened,
+        "protocol": protocol_for_port(opened[0]),
+    }
+
+@app.route("/scan", methods=["GET", "POST"])
+@permission_required("scan")
+def scan():
+    results = []
+    error = None
+    if request.method == "POST":
+        target = request.form.get("target", "").strip()
+        raw_ports = request.form.get("ports", "22,3389,5900").strip()
+        try:
+            hosts = _validate_scan_network(target)
+            ports = []
+            for value in raw_ports.split(","):
+                value = value.strip()
+                if value.isdigit():
+                    port = int(value)
+                    if 1 <= port <= 65535 and port not in ports:
+                        ports.append(port)
+            if not ports:
+                raise ValueError("Enter at least one valid TCP port.")
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=64, thread_name_prefix="network-scan") as executor:
+                scanned = executor.map(lambda address: _scan_host(str(address), ports), hosts)
+                results = [item for item in scanned if item]
+        except ValueError as exc:
+            error = str(exc)
+    return render_template("scan.html", results=results, error=error)
+
+@app.route("/scan/add", methods=["POST"])
+@permission_required("manage_computers")
+def scan_add():
+    address = request.form.get("address", "").strip()
+    name = request.form.get("name", address).strip() or address
+    protocol = request.form.get("protocol", "ssh").strip().lower()
+    port_value = request.form.get("port", "").strip()
+    try:
+        ipaddress.ip_address(address)
+        port = int(port_value)
+        if port < 1 or port > 65535:
+            raise ValueError("Invalid port.")
+        if protocol not in {"ssh", "rdp", "vnc"}:
+            raise ValueError("Invalid protocol.")
+    except ValueError:
+        flash("Invalid scan result.")
+        return redirect(url_for("scan"))
+
+    c = db()
+    try:
+        c.execute(
+            "INSERT INTO computers(name,address,protocol,port,os,status,last_seen) VALUES(?,?,?,?,?,?,?)",
+            (name, address, protocol, port, "Unknown", "discovered", datetime.now().isoformat(timespec="seconds")),
+        )
+        c.commit()
+        flash(f"Added {name}.")
+    except sqlite3.IntegrityError:
+        flash("A computer with that name already exists.")
+    finally:
+        c.close()
+    return redirect(url_for("scan"))
+
 @app.route("/setup", methods=["GET","POST"])
 def setup():
     if account_count():
