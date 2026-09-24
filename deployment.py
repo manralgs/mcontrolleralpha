@@ -145,6 +145,8 @@ def _deploy_ssh(update, target, username):
     def remote(command, timeout):
         return _ssh_command(target["address"], target["port"], username, command, key, timeout=timeout)
 
+    result_text = None
+    operation_error = None
     cleanup_error = None
     try:
         prep = (
@@ -170,7 +172,9 @@ def _deploy_ssh(update, target, username):
         install_result = remote(install, 600)
         if install_result.returncode != 0:
             raise RuntimeError((install_result.stderr or install_result.stdout or "Remote installation failed").strip()[-2000:])
-        return (install_result.stdout or "Deployment completed.").strip()[-2000:]
+        result_text = (install_result.stdout or "Deployment completed.").strip()[-2000:]
+    except Exception as exc:
+        operation_error = exc
     finally:
         try:
             cleanup = remote("rm -rf " + shlex.quote(remote_dir), 30)
@@ -178,8 +182,16 @@ def _deploy_ssh(update, target, username):
                 raise RuntimeError((cleanup.stderr or cleanup.stdout or "Remote cleanup failed").strip()[-1000:])
         except Exception as exc:
             cleanup_error = exc
+
+    if operation_error:
+        if cleanup_error:
+            raise RuntimeError(
+                f"{operation_error}; remote deployment cleanup also failed: {cleanup_error}"
+            ) from operation_error
+        raise operation_error
     if cleanup_error:
         raise RuntimeError(f"Remote deployment cleanup failed: {cleanup_error}")
+    return result_text
 
 def _preflight_target(row, timeout=1.0):
     try:
@@ -296,7 +308,7 @@ def preflight(job_id):
 def dispatch(job_id):
     _init()
     c = conn()
-    job = c.execute("""SELECT j.*,s.name software,s.version,s.platform,s.package_url,s.install_command
+    job = c.execute("""SELECT j.*,s.name software,s.version,s.platform,s.package_url,s.install_command,s.sha256
                        FROM deployment_jobs j JOIN software_updates s ON s.id=j.software_update_id
                        WHERE j.id=?""", (job_id,)).fetchone()
     targets = c.execute("""SELECT t.*,c.name computer,c.address,c.protocol,c.port,c.os
