@@ -12,6 +12,7 @@ class MControllerPlaybookTests(unittest.TestCase):
         os.environ["MCONTROLLER_DB"] = str(self.db)
         os.environ["MCONTROLLER_SECRET_KEY"] = "test-secret-key"
         os.environ["MCONTROLLER_TESTING"] = "1"
+        os.environ["MCONTROLLER_BACKUP_ROOT"] = str(Path(self.tmp.name) / "backups")
         import app
         import enhancements
         self.app_module = app
