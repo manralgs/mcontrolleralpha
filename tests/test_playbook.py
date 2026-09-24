@@ -109,6 +109,35 @@ class MControllerPlaybookTests(unittest.TestCase):
     def test_discovery_scheduler_starts(self):
         self.assertTrue(getattr(self.app, "_discovery_scheduler_started", False))
 
+    def test_discovery_run_executes_and_records_endpoint(self):
+        self._login()
+        now = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+        c = sqlite3.connect(self.db)
+        c.execute(
+            "INSERT INTO discovery_jobs(name,target,ports,interval_minutes,enabled,created_at) VALUES(?,?,?,?,?,?)",
+            ("playbook-discovery", "192.168.1.10/32", "22", 60, 1, now),
+        )
+        c.commit()
+        job_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        c.close()
+
+        from unittest.mock import patch
+        with patch.object(self.app_module, "probe_host", return_value=[22]):
+            found = self.enhancements_module._run_discovery(
+                self.enhancements_module.conn().execute(
+                    "SELECT * FROM discovery_jobs WHERE id=?", (job_id,)
+                ).fetchone()
+            )
+
+        self.assertEqual(found, [("192.168.1.10", 22, "ssh")])
+        c = sqlite3.connect(self.db)
+        row = c.execute(
+            "SELECT address,port,protocol,status FROM discovery_results WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+        c.close()
+        self.assertEqual(row, ("192.168.1.10", 22, "ssh", "pending"))
+
     def test_settings_persist_and_validate_port(self):
         self._login()
         csrf = self._csrf()
