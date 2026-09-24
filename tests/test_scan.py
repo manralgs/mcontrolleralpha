@@ -36,6 +36,8 @@ class MControllerScanTests(unittest.TestCase):
             "password": password,
         }, follow_redirects=False)
         self.assertEqual(response.status_code, 302)
+        # The application creates the CSRF token through the template context.
+        self.client.get("/scan")
 
     def _csrf(self):
         with self.client.session_transaction() as sess:
