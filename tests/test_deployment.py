@@ -233,6 +233,7 @@ class MControllerDeploymentTests(unittest.TestCase):
     def test_dispatch_passes_release_sha256_to_transport(self):
         import deployment
         self._login("admin")
+        deployment._init()
         sha256 = "a" * 64
         c = sqlite3.connect(self.db)
         c.execute(
