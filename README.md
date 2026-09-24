@@ -40,7 +40,7 @@ The API endpoint `/api/archives` returns the archive metadata and relative brows
 
 ## Apache Guacamole
 
-The repository includes a Docker Compose stack for Apache Guacamole 1.6.0 with PostgreSQL and `guacd`. Apache Guacamole 1.6.0 is the current stable release documented by Apache Guacamole. citeturn549570search0turn549570search3
+The repository includes a Docker Compose stack for Apache Guacamole 1.6.0 with PostgreSQL and `guacd`. Apache Guacamole 1.6.0 is the current stable release documented by Apache Guacamole.
 
 Start the Guacamole stack from the repository root:
 
