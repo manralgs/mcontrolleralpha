@@ -636,6 +636,7 @@ def _discovery_init():
     c.commit(); c.close()
 
 def _run_discovery(job):
+    from app import probe_host, protocol_for_port
     target=ipaddress.ip_network(job["target"],strict=False)
     if target.version!=4 or not target.is_private or target.prefixlen<16 or len(list(target.hosts()))>1024:
         raise ValueError("Discovery requires a private IPv4 /16-/32 range with at most 1024 hosts.")
