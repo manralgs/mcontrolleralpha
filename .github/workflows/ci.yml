@@ -47,3 +47,38 @@ jobs:
             fi
           done
           test "$forbidden" -eq 0
+
+      - name: Package complete application
+        if: matrix.python-version == '3.12'
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          root = Path(".").resolve()
+          output = root / f"mcontrolleralpha-{os.environ['RELEASE_SHA'][:12]}.zip"
+          excluded = {".git", ".venv", "__pycache__", "runtime", "archives", "mcontroller.db", ".env", output.name}
+
+          with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  rel = path.relative_to(root)
+                  if any(part in excluded for part in rel.parts):
+                      continue
+                  archive.write(path, rel.as_posix())
+
+          print(output)
+          PY
+
+      - name: Upload complete application ZIP
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcontrolleralpha-${{ github.sha }}
+          path: mcontrolleralpha-${{ github.sha }}.zip
+          if-no-files-found: error
+          retention-days: 30
